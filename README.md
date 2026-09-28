@@ -33,3 +33,17 @@ npm run dev:server
 ```
 
 `POST /api/discover` accepts `{ "url": "https://example.com" }` and returns visible page controls, basic form details, and a base64-encoded PNG screenshot. The API defaults to port `3001`; set `PORT` to override it.
+
+`GET /api/health` provides a lightweight process health check.
+
+## AI test planning
+
+Set `OPENAI_API_KEY` and `OPENAI_MODEL` in the server process environment (see `.env.example` for the required names). `POST /api/test-plans` accepts the complete JSON response from `/api/discover` and returns the identified page purpose plus 3–6 validated test scenarios. It creates plans only; it does not execute actions.
+
+## Verify
+
+```bash
+npm run lint
+npm test
+npm run build
+```

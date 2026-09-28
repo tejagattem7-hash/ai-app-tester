@@ -9,13 +9,16 @@
     "build": "tsc -b && vite build",
     "start:server": "node backend/dist/index.js",
     "lint": "eslint .",
+    "test": "node --import tsx --test backend/test/*.test.ts",
     "preview": "vite preview"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.1.13",
     "clsx": "^2.1.1",
     "express": "^5.1.0",
+    "ipaddr.js": "^2.2.0",
     "lucide-react": "^0.544.0",
+    "openai": "^6.16.0",
     "playwright": "^1.55.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",

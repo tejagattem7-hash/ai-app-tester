@@ -1,45 +1,31 @@
 import { lookup } from "node:dns/promises"
-import { isIP } from "node:net"
+import ipaddr from "ipaddr.js"
 
 const blockedHostnames = new Set(["localhost", "localhost.localdomain"])
+const DNS_TIMEOUT_MS = 5_000
 
-function isPublicIpv4(address: string): boolean {
-  const parts = address.split(".").map(Number)
-  const [a = 0, b = 0] = parts
-
-  return !(
-    a === 0 ||
-    a === 10 ||
-    a === 127 ||
-    (a === 100 && b >= 64 && b <= 127) ||
-    (a === 169 && b === 254) ||
-    (a === 172 && b >= 16 && b <= 31) ||
-    (a === 192 && b === 0) ||
-    (a === 192 && b === 168) ||
-    (a === 198 && (b === 18 || b === 19)) ||
-    a >= 224
-  )
-}
-
-function isPublicIpv6(address: string): boolean {
-  const normalized = address.toLowerCase().replace(/^\[|\]$/g, "")
-  const mappedIpv4 = normalized.match(/::ffff:(\d+\.\d+\.\d+\.\d+)$/)?.[1]
-  if (mappedIpv4) return isPublicIpv4(mappedIpv4)
-
-  return !(
-    normalized === "::" ||
-    normalized === "::1" ||
-    normalized.startsWith("fc") ||
-    normalized.startsWith("fd") ||
-    /^fe[89ab]/.test(normalized)
-  )
+async function resolveHostname(hostname: string): Promise<Array<{ address: string; family: number }>> {
+  let timeout: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      lookup(hostname, { all: true, verbatim: true }),
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(() => reject(new Error("DNS lookup timed out")), DNS_TIMEOUT_MS)
+      }),
+    ])
+  } finally {
+    if (timeout) clearTimeout(timeout)
+  }
 }
 
 function isPublicAddress(address: string): boolean {
-  const version = isIP(address.replace(/^\[|\]$/g, ""))
-  if (version === 4) return isPublicIpv4(address)
-  if (version === 6) return isPublicIpv6(address)
-  return false
+  try {
+    let parsed = ipaddr.parse(address.replace(/^\[|\]$/g, ""))
+    if (parsed instanceof ipaddr.IPv6 && parsed.isIPv4MappedAddress()) parsed = parsed.toIPv4Address()
+    return parsed.range() === "unicast"
+  } catch {
+    return false
+  }
 }
 
 export class PublicUrlError extends Error {
@@ -69,14 +55,14 @@ export async function assertPublicHttpUrl(rawUrl: string): Promise<URL> {
     throw new PublicUrlError("URL must use a public hostname")
   }
 
-  if (isIP(hostname)) {
+  if (ipaddr.isValid(hostname)) {
     if (!isPublicAddress(hostname)) throw new PublicUrlError("Private and local network addresses are not allowed")
     return url
   }
 
   let addresses: Array<{ address: string; family: number }>
   try {
-    addresses = await lookup(hostname, { all: true, verbatim: true })
+    addresses = await resolveHostname(hostname)
   } catch {
     throw new PublicUrlError("URL hostname could not be resolved")
   }

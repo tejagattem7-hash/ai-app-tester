@@ -1,7 +1,7 @@
 import { Router } from "express"
 import { z } from "zod"
 import { discoverRequestSchema } from "../schemas/discover.schema.js"
-import { DiscoveryNavigationError, discoverPage } from "../services/discovery.service.js"
+import { DiscoveryCapacityError, DiscoveryNavigationError, discoverPage } from "../services/discovery.service.js"
 import { PublicUrlError } from "../utils/public-url.js"
 
 export const discoverRouter = Router()
@@ -22,6 +22,10 @@ discoverRouter.post("/", async (request, response) => {
     }
     if (error instanceof DiscoveryNavigationError) {
       response.status(502).json({ error: "Unable to discover page", details: error.message })
+      return
+    }
+    if (error instanceof DiscoveryCapacityError) {
+      response.set("Retry-After", "5").status(503).json({ error: error.message })
       return
     }
     throw error

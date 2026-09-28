@@ -1,14 +1,23 @@
 import { chromium, errors, type Browser, type Page } from "playwright"
-import type { DiscoveryResult } from "../types/discovery.js"
+import type { DiscoveryResult } from "../schemas/discovery-result.schema.js"
 import { assertPublicHttpUrl, PublicUrlError } from "../utils/public-url.js"
 
 const NAVIGATION_TIMEOUT_MS = 20_000
 const MAX_ITEMS_PER_TYPE = 200
+const MAX_CONCURRENT_DISCOVERIES = 2
+let activeDiscoveries = 0
 
 export class DiscoveryNavigationError extends Error {
   constructor(message: string) {
     super(message)
     this.name = "DiscoveryNavigationError"
+  }
+}
+
+export class DiscoveryCapacityError extends Error {
+  constructor() {
+    super("The discovery service is at capacity; retry shortly")
+    this.name = "DiscoveryCapacityError"
   }
 }
 
@@ -70,6 +79,9 @@ async function extractPageDetails(page: Page): Promise<Omit<DiscoveryResult, "ti
 
 export async function discoverPage(rawUrl: string): Promise<DiscoveryResult> {
   const initialUrl = await assertPublicHttpUrl(rawUrl)
+  if (activeDiscoveries >= MAX_CONCURRENT_DISCOVERIES) throw new DiscoveryCapacityError()
+
+  activeDiscoveries += 1
   const checkedHosts = new Set<string>()
   let browser: Browser | undefined
 
@@ -81,21 +93,22 @@ export async function discoverPage(rawUrl: string): Promise<DiscoveryResult> {
     })
 
     await context.route("**/*", async (route) => {
-      const request = route.request()
-      if (!request.isNavigationRequest()) return route.continue()
-
       try {
-        const requestUrl = new URL(request.url())
+        const requestUrl = new URL(route.request().url())
+        if (requestUrl.protocol !== "http:" && requestUrl.protocol !== "https:") {
+          if (["about:", "blob:", "data:"].includes(requestUrl.protocol)) return route.continue()
+          return route.abort("blockedbyclient")
+        }
+
         const hostKey = `${requestUrl.protocol}//${requestUrl.host}`
         if (!checkedHosts.has(hostKey)) {
-          await assertPublicHttpUrl(request.url())
+          await assertPublicHttpUrl(requestUrl.href)
           checkedHosts.add(hostKey)
         }
         await route.continue()
       } catch (error) {
         await route.abort("blockedbyclient")
-        if (error instanceof PublicUrlError) return
-        throw error
+        if (!(error instanceof PublicUrlError)) console.error("Request blocked during URL validation", error)
       }
     })
 
@@ -111,7 +124,7 @@ export async function discoverPage(rawUrl: string): Promise<DiscoveryResult> {
     const [title, details, screenshot] = await Promise.all([
       page.title(),
       extractPageDetails(page),
-      page.screenshot({ fullPage: true, type: "png" }),
+      page.screenshot({ type: "png" }),
     ])
 
     return {
@@ -128,5 +141,6 @@ export async function discoverPage(rawUrl: string): Promise<DiscoveryResult> {
     throw new DiscoveryNavigationError(error instanceof Error ? error.message : "Unable to inspect the page")
   } finally {
     await browser?.close()
+    activeDiscoveries -= 1
   }
 }
