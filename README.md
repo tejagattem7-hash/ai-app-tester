@@ -14,10 +14,13 @@ The frontend currently uses static report data. The backend provides page discov
 ## Project structure
 
 ```text
-frontend/       React application source
-backend/src/    Express API source
+frontend/
+  src/          React application source
+  dist/         Generated frontend build; do not edit
+backend/
+  src/          Express API source
+  dist/         Generated backend build; do not edit
 docs/           Product requirements
-dist/           Generated frontend and backend builds
 ```
 
 ## Discovery API

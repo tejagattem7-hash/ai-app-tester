@@ -12,7 +12,7 @@ export default defineConfig({
     },
   },
   build: {
-    outDir: path.resolve(__dirname, "./dist/frontend"),
+    outDir: path.resolve(__dirname, "./frontend/dist"),
     emptyOutDir: true,
   },
 })

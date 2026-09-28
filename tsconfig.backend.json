@@ -6,7 +6,7 @@
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "rootDir": "backend/src",
-    "outDir": "dist/backend",
+    "outDir": "backend/dist",
     "strict": true,
     "skipLibCheck": true,
     "esModuleInterop": true,
