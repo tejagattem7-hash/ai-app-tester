@@ -22,59 +22,65 @@ export class DiscoveryCapacityError extends Error {
 }
 
 async function extractPageDetails(page: Page): Promise<Omit<DiscoveryResult, "title" | "url" | "screenshot">> {
-  return page.locator("body").evaluate((body, maxItems) => {
-    const isVisible = (element: Element) => {
-      const style = window.getComputedStyle(element)
-      const rect = element.getBoundingClientRect()
-      return style.visibility !== "hidden" && style.display !== "none" && rect.width > 0 && rect.height > 0
+  const cleanText = (value: string | null) => value?.replace(/\s+/g, " ").trim() ?? ""
+  const visible = async (selector: string) => {
+    const matches = page.locator(`body ${selector}`)
+    const result = []
+    for (let index = 0; index < await matches.count() && result.length < MAX_ITEMS_PER_TYPE; index += 1) {
+      const match = matches.nth(index)
+      if (await match.isVisible()) result.push(match)
     }
-    const cleanText = (value: string | null | undefined) => value?.replace(/\s+/g, " ").trim() ?? ""
-    const labelFor = (input: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement) => {
-      const explicit = input.id ? body.querySelector(`label[for="${CSS.escape(input.id)}"]`)?.textContent : null
-      return cleanText(explicit || input.closest("label")?.textContent) || null
+    return result
+  }
+
+  const labels = new Map<string, string>()
+  const labelLocators = page.locator("body label[for]")
+  for (let index = 0; index < await labelLocators.count(); index += 1) {
+    const label = labelLocators.nth(index)
+    const target = await label.getAttribute("for")
+    if (target && !labels.has(target)) labels.set(target, cleanText(await label.textContent()))
+  }
+
+  const inputs = await Promise.all((await visible("input, textarea, select")).map(async (input) => {
+    const id = await input.getAttribute("id")
+    const isInput = await input.locator("xpath=self::input").count() > 0
+    const isTextarea = await input.locator("xpath=self::textarea").count() > 0
+    const nestedLabel = await input.locator("xpath=ancestor::label[1]").textContent().catch(() => null)
+    return {
+      type: isInput ? (await input.getAttribute("type") || "text").toLowerCase() : isTextarea ? "textarea" : "select",
+      name: await input.getAttribute("name"),
+      id: id || null,
+      placeholder: await input.getAttribute("placeholder"),
+      label: (id ? labels.get(id) : undefined) || cleanText(nestedLabel) || null,
+      required: await input.getAttribute("required") !== null,
+      disabled: await input.getAttribute("disabled") !== null,
     }
+  }))
 
-    const inputs = Array.from(body.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>("input, textarea, select"))
-      .filter(isVisible)
-      .slice(0, maxItems)
-      .map((input) => ({
-        type: input instanceof HTMLInputElement ? input.type : input.tagName.toLowerCase(),
-        name: input.getAttribute("name"),
-        id: input.id || null,
-        placeholder: input.getAttribute("placeholder"),
-        label: labelFor(input),
-        required: input.required,
-        disabled: input.disabled,
-      }))
+  const buttons = await Promise.all((await visible("button, input[type='button'], input[type='submit'], input[type='reset']")).map(async (button) => {
+    const isInput = await button.locator("xpath=self::input").count() > 0
+    return {
+      text: cleanText(isInput ? await button.inputValue() : await button.textContent()),
+      type: await button.getAttribute("type") || (isInput ? "button" : "submit"),
+      name: await button.getAttribute("name"),
+      disabled: await button.getAttribute("disabled") !== null,
+    }
+  }))
 
-    const buttons = Array.from(body.querySelectorAll<HTMLButtonElement | HTMLInputElement>("button, input[type='button'], input[type='submit'], input[type='reset']"))
-      .filter(isVisible)
-      .slice(0, maxItems)
-      .map((button) => ({
-        text: cleanText(button instanceof HTMLInputElement ? button.value : button.textContent),
-        type: button.getAttribute("type") || (button instanceof HTMLButtonElement ? "submit" : "button"),
-        name: button.getAttribute("name"),
-        disabled: button.disabled,
-      }))
+  const links = await Promise.all((await visible("a[href]")).map(async (link) => ({
+    text: cleanText(await link.textContent()) || await link.getAttribute("aria-label") || "",
+    href: new URL((await link.getAttribute("href"))!, page.url()).href,
+  })))
 
-    const links = Array.from(body.querySelectorAll<HTMLAnchorElement>("a[href]"))
-      .filter(isVisible)
-      .slice(0, maxItems)
-      .map((link) => ({ text: cleanText(link.textContent) || link.getAttribute("aria-label") || "", href: link.href }))
+  const forms = await Promise.all((await visible("form")).map(async (form) => ({
+    action: new URL(await form.getAttribute("action") || page.url(), page.url()).href,
+    method: (await form.getAttribute("method") || "get").toUpperCase(),
+    name: await form.getAttribute("name"),
+    id: await form.getAttribute("id") || null,
+    controls: await form.locator("input, button, select, textarea, fieldset, object, output").count(),
+  })))
 
-    const forms = Array.from(body.querySelectorAll<HTMLFormElement>("form"))
-      .filter(isVisible)
-      .slice(0, maxItems)
-      .map((form) => ({
-        action: form.action,
-        method: form.method.toUpperCase(),
-        name: form.getAttribute("name"),
-        id: form.id || null,
-        controls: form.elements.length,
-      }))
-
-    return { inputs, buttons, links, forms }
-  }, MAX_ITEMS_PER_TYPE)
+  return { inputs, buttons, links, forms }
 }
 
 export async function discoverPage(rawUrl: string): Promise<DiscoveryResult> {

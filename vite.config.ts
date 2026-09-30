@@ -11,6 +11,11 @@ export default defineConfig({
       "@": path.resolve(__dirname, "./frontend/src"),
     },
   },
+  server: {
+    proxy: {
+      "/api": "http://localhost:3001",
+    },
+  },
   build: {
     outDir: path.resolve(__dirname, "./frontend/dist"),
     emptyOutDir: true,
