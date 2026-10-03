@@ -1,9 +1,11 @@
-import { chromium, errors, type Browser, type Page } from "playwright"
-import type { DiscoveryResult } from "../schemas/discovery-result.schema.js"
+import { chromium, errors, type Browser, type Locator, type Page } from "playwright"
+import { MAX_VISIBLE_TEXT_CHARACTERS, type DiscoveryResult } from "../schemas/discovery-result.schema.js"
 import { assertPublicHttpUrl, PublicUrlError } from "../utils/public-url.js"
 
 const NAVIGATION_TIMEOUT_MS = 20_000
 const MAX_ITEMS_PER_TYPE = 200
+const RENDER_TIMEOUT_MS = 5_000
+const RENDER_QUIET_MS = 500
 const MAX_CONCURRENT_DISCOVERIES = 2
 let activeDiscoveries = 0
 
@@ -21,7 +23,37 @@ export class DiscoveryCapacityError extends Error {
   }
 }
 
-async function extractPageDetails(page: Page): Promise<Omit<DiscoveryResult, "title" | "url" | "screenshot">> {
+export async function waitForRenderedPage(page: Page): Promise<void> {
+  // DOMContentLoaded/load can both precede asynchronous SPA rendering. Wait for
+  // visible semantic content and a quiet DOM, with a deadline for dynamic pages.
+  await page.evaluate(({ timeoutMs, quietMs }) => new Promise<void>((resolve) => {
+    let lastMutation = performance.now()
+    const observer = new MutationObserver(() => { lastMutation = performance.now() })
+    observer.observe(document.documentElement, { subtree: true, childList: true, attributes: true, characterData: true })
+    const deadline = setTimeout(() => {
+      observer.disconnect()
+      clearInterval(poll)
+      resolve()
+    }, timeoutMs)
+    const poll = setInterval(() => {
+      if (performance.now() - lastMutation < quietMs) return
+      const candidates = document.querySelectorAll("body h1, body h2, body h3, body h4, body h5, body h6, body input, body textarea, body select, body button, body a[href], body form")
+      for (let index = 0; index < candidates.length; index += 1) {
+        const element = candidates.item(index)
+        const bounds = element.getBoundingClientRect()
+        if (getComputedStyle(element).visibility === "visible" && bounds.width > 0 && bounds.height > 0) {
+          observer.disconnect()
+          clearInterval(poll)
+          clearTimeout(deadline)
+          resolve()
+          return
+        }
+      }
+    }, 100)
+  }), { timeoutMs: RENDER_TIMEOUT_MS, quietMs: RENDER_QUIET_MS })
+}
+
+export async function extractPageDetails(page: Page): Promise<Omit<DiscoveryResult, "title" | "url" | "screenshot">> {
   const cleanText = (value: string | null) => value?.replace(/\s+/g, " ").trim() ?? ""
   const visible = async (selector: string) => {
     const matches = page.locator(`body ${selector}`)
@@ -80,7 +112,26 @@ async function extractPageDetails(page: Page): Promise<Omit<DiscoveryResult, "ti
     controls: await form.locator("input, button, select, textarea, fieldset, object, output").count(),
   })))
 
-  return { inputs, buttons, links, forms }
+  let remainingText = MAX_VISIBLE_TEXT_CHARACTERS
+  const readVisibleText = async (element: Locator) => {
+    const text = cleanText(await element.innerText()).slice(0, Math.min(500, remainingText))
+    remainingText -= text.length
+    return text
+  }
+  const headings: { level: number; text: string }[] = []
+  for (const heading of await visible("h1, h2, h3, h4, h5, h6")) {
+    if (!remainingText) break
+    const text = await readVisibleText(heading)
+    if (text) headings.push({ level: await heading.evaluate((element) => Number(element.tagName.slice(1))), text })
+  }
+  const paragraphs: string[] = []
+  for (const paragraph of await visible("p")) {
+    if (!remainingText) break
+    const text = await readVisibleText(paragraph)
+    if (text) paragraphs.push(text)
+  }
+
+  return { inputs, buttons, links, forms, visibleText: { headings, paragraphs } }
 }
 
 export async function discoverPage(rawUrl: string): Promise<DiscoveryResult> {
@@ -126,6 +177,7 @@ export async function discoverPage(rawUrl: string): Promise<DiscoveryResult> {
     if (!response) throw new DiscoveryNavigationError("The page did not return a navigation response")
     if (response.status() >= 400) throw new DiscoveryNavigationError(`The page returned HTTP ${response.status()}`)
 
+    await waitForRenderedPage(page)
     await assertPublicHttpUrl(page.url())
     const [title, details, screenshot] = await Promise.all([
       page.title(),

@@ -1,6 +1,8 @@
 import express, { type ErrorRequestHandler } from "express"
 import { discoverRouter } from "./routes/discover.route.js"
+import { evaluationsRouter } from "./routes/evaluations.route.js"
 import { testPlansRouter } from "./routes/test-plans.route.js"
+import { testRunsRouter } from "./routes/test-runs.route.js"
 
 export const app = express()
 
@@ -10,7 +12,9 @@ app.get("/api/health", (_request, response) => {
   response.json({ status: "ok" })
 })
 app.use("/api/discover", discoverRouter)
+app.use("/api/evaluations", evaluationsRouter)
 app.use("/api/test-plans", testPlansRouter)
+app.use("/api/test-runs", testRunsRouter)
 
 app.use((_request, response) => {
   response.status(404).json({ error: "Not found" })

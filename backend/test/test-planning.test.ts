@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 import type { TestPlanningLlmProvider } from "../src/providers/llm/test-planning.provider.js"
 import type { DiscoveryResultInput } from "../src/schemas/discovery-result.schema.js"
-import { testPlanSchema } from "../src/schemas/test-plan.schema.js"
+import { MAX_TEST_SCENARIOS, testPlanSchema } from "../src/schemas/test-plan.schema.js"
 import { createTestPlan, InvalidTestPlanError } from "../src/services/test-planning.service.js"
 
 const discovery: DiscoveryResultInput = {
@@ -35,6 +35,26 @@ describe("test planning", () => {
       tests: [scenario("content-one"), scenario("content-two"), scenario("content-three")],
     }))
     assert.equal(result.tests.length, 3)
+  })
+
+  it("accepts a plan with more than six scenarios", async () => {
+    const tests = Array.from({ length: 7 }, (_, index) => scenario(`scenario-${index + 1}`))
+    const result = await createTestPlan(discovery, providerFor({ pagePurpose: "Exercise a complex page", tests }))
+    assert.equal(result.tests.length, 7)
+  })
+
+  it("allows fewer than three scenarios when only fewer meaningful tests exist", () => {
+    const result = testPlanSchema.safeParse({
+      pagePurpose: "Show one piece of content",
+      tests: [scenario("content-only")],
+    })
+    assert.equal(result.success, true)
+  })
+
+  it("enforces the configured scenario maximum", () => {
+    const tests = Array.from({ length: MAX_TEST_SCENARIOS + 1 }, (_, index) => scenario(`scenario-${index + 1}`))
+    const result = testPlanSchema.safeParse({ pagePurpose: "Oversized plan", tests })
+    assert.equal(result.success, false)
   })
 
   it("rejects executable code actions", () => {

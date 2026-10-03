@@ -1,5 +1,7 @@
 import { z } from "zod"
 
+export const MAX_TEST_SCENARIOS = 15
+
 const target = z.string().min(1).max(300).describe("A semantic description of the visible element to interact with")
 
 const clickActionSchema = z.object({
@@ -62,7 +64,7 @@ export const testScenarioSchema = z.object({
 
 export const testPlanSchema = z.object({
   pagePurpose: z.string().min(1).max(500),
-  tests: z.array(testScenarioSchema).min(3).max(6),
+  tests: z.array(testScenarioSchema).min(1).max(MAX_TEST_SCENARIOS),
 }).strict()
 
 export type TestPlan = z.infer<typeof testPlanSchema>

@@ -1,10 +1,12 @@
-import { ArrowLeft, Circle } from "lucide-react"
+import { ArrowLeft, Circle, Play } from "lucide-react"
+import { useState } from "react"
 import { useLocation, useNavigate } from "react-router-dom"
 import { PageHeader } from "@/components/PageHeader"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import type { TestAction, TestPlanNavigationState } from "@/types/planning"
+import type { RunningNavigationState } from "@/types/execution"
 
 const actionLabels: Record<TestAction["type"], string> = {
   click: "Click",
@@ -35,6 +37,7 @@ function describeAction(action: TestAction): string {
 
 export function TestPlanPage() {
   const navigate = useNavigate()
+  const [isStarting, setIsStarting] = useState(false)
   const location = useLocation()
   const state = location.state as TestPlanNavigationState | null
 
@@ -48,9 +51,15 @@ export function TestPlanPage() {
   }
 
   const { plan, url } = state
+  const startRun = () => {
+    if (isStarting) return
+    setIsStarting(true)
+    const runningState: RunningNavigationState = { url, plan }
+    navigate("/running", { state: runningState })
+  }
   return (
     <div className="space-y-8">
-      <PageHeader eyebrow="AI test plan" title={`${plan.tests.length} generated tests are ready.`} description={plan.pagePurpose} actions={<Button variant="outline" onClick={() => navigate("/")}><ArrowLeft className="size-4" />Edit URL</Button>} />
+      <PageHeader eyebrow="AI test plan" title={`${plan.tests.length} generated tests are ready.`} description={plan.pagePurpose} actions={<><Button variant="outline" onClick={() => navigate("/")}><ArrowLeft className="size-4" />Edit URL</Button><Button onClick={startRun} disabled={isStarting}><Play className="size-4" />{isStarting ? "Starting..." : "Run tests"}</Button></>} />
       <div className="flex flex-wrap items-center gap-3 rounded-xl border border-slate-200 bg-white px-5 py-4 text-sm"><Badge variant="info">Ready</Badge><span className="break-all font-medium text-slate-900">{url}</span><span className="text-slate-400">•</span><span className="text-slate-500">{plan.tests.length} generated tests</span></div>
       <div className="space-y-4">{plan.tests.map((scenario) => (
         <Card key={scenario.id}>

@@ -1,4 +1,5 @@
 import type { DiscoveryResult, TestPlan } from "@/types/planning"
+import type { Evaluation, TestRun } from "@/types/execution"
 
 interface ApiErrorBody {
   error?: string
@@ -38,4 +39,12 @@ export function discoverPage(url: string): Promise<DiscoveryResult> {
 
 export function createTestPlan(discovery: DiscoveryResult): Promise<TestPlan> {
   return postJson<TestPlan>("/api/test-plans", discovery)
+}
+
+export function runTests(url: string, plan: TestPlan): Promise<TestRun> {
+  return postJson<TestRun>("/api/test-runs", { url, plan })
+}
+
+export function evaluateRun(url: string, plan: TestPlan, run: TestRun): Promise<Evaluation> {
+  return postJson<Evaluation>("/api/evaluations", { url, plan, run })
 }

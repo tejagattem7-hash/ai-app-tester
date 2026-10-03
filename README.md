@@ -38,7 +38,7 @@ npm run dev:server
 
 ## AI test planning
 
-Set `OPENAI_API_KEY` and `OPENAI_MODEL` in the server process environment (see `.env.example` for the required names). `POST /api/test-plans` accepts the complete JSON response from `/api/discover` and returns the identified page purpose plus 3–6 validated test scenarios. It creates plans only; it does not execute actions.
+Set `OPENAI_API_KEY` and `OPENAI_MODEL` in the server process environment (see `.env.example` for the required names). `POST /api/test-plans` accepts the complete JSON response from `/api/discover` and returns the identified page purpose plus a complexity-based set of 1–15 validated test scenarios. It aims for at least three when that many meaningful, non-duplicate tests exist. It creates plans only; it does not execute actions.
 
 ## Verify
 

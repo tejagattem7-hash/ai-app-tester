@@ -35,6 +35,10 @@ export interface DiscoveryResult {
   buttons: DiscoveredButton[]
   links: DiscoveredLink[]
   forms: DiscoveredForm[]
+  visibleText?: {
+    headings: { level: number; text: string }[]
+    paragraphs: string[]
+  }
   screenshot: {
     mimeType: "image/png"
     encoding: "base64"
