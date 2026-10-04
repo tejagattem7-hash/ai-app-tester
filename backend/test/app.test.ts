@@ -51,4 +51,13 @@ describe("API basics", () => {
     })
     assert.equal(response.status, 400)
   })
+
+  it("rejects private exploration URLs and caller-supplied limit overrides", async () => {
+    for (const body of [{ url: "http://127.0.0.1" }, { url: "https://example.com", maxPages: 500 }]) {
+      const response = await fetch(`${baseUrl}/api/explore`, {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+      })
+      assert.equal(response.status, 400)
+    }
+  })
 })

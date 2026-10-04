@@ -5,7 +5,7 @@ import { PageHeader } from "@/components/PageHeader"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { targetUrl } from "@/data/mockData"
-import { createTestPlan, discoverPage } from "@/lib/api"
+import { createTestPlan, discoverPage, exploreApplication } from "@/lib/api"
 import type { TestPlanNavigationState } from "@/types/planning"
 
 export function NewTestPage() {
@@ -13,6 +13,7 @@ export function NewTestPage() {
   const [url, setUrl] = useState(targetUrl)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [explore, setExplore] = useState(false)
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
@@ -23,7 +24,7 @@ export function NewTestPage() {
     setError(null)
 
     try {
-      const discovery = await discoverPage(submittedUrl)
+      const discovery = await (explore ? exploreApplication(submittedUrl) : discoverPage(submittedUrl))
       const plan = await createTestPlan(discovery)
       const state: TestPlanNavigationState = { url: submittedUrl, plan }
       navigate("/plan", { state })
@@ -50,6 +51,10 @@ export function NewTestPage() {
                 {isLoading ? <><LoaderCircle className="size-4 animate-spin" />Creating plan...</> : <>Create test plan <ArrowRight className="size-4" /></>}
               </Button>
             </div>
+            <label className="mt-4 flex items-center gap-2 text-sm text-slate-600">
+              <input type="checkbox" checked={explore} onChange={(event) => setExplore(event.target.checked)} disabled={isLoading} />
+              Explore safe entry points and related pages (up to 5 states; may take a minute)
+            </label>
             {error && <p role="alert" className="mt-3 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p>}
             <p className="mt-3 flex items-center gap-2 text-xs text-slate-500"><ShieldCheck className="size-3.5" />Only publicly accessible pages are supported in this MVP.</p>
           </form>

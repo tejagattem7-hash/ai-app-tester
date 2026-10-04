@@ -1,5 +1,6 @@
 import express, { type ErrorRequestHandler } from "express"
 import { discoverRouter } from "./routes/discover.route.js"
+import { exploreRouter } from "./routes/explore.route.js"
 import { evaluationsRouter } from "./routes/evaluations.route.js"
 import { testPlansRouter } from "./routes/test-plans.route.js"
 import { testRunsRouter } from "./routes/test-runs.route.js"
@@ -12,6 +13,7 @@ app.get("/api/health", (_request, response) => {
   response.json({ status: "ok" })
 })
 app.use("/api/discover", discoverRouter)
+app.use("/api/explore", exploreRouter)
 app.use("/api/evaluations", evaluationsRouter)
 app.use("/api/test-plans", testPlansRouter)
 app.use("/api/test-runs", testRunsRouter)

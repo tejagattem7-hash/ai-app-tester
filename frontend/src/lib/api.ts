@@ -1,4 +1,4 @@
-import type { DiscoveryResult, TestPlan } from "@/types/planning"
+import type { DiscoveryResult, ExplorationResult, TestPlan } from "@/types/planning"
 import type { Evaluation, TestRun } from "@/types/execution"
 
 interface ApiErrorBody {
@@ -37,7 +37,11 @@ export function discoverPage(url: string): Promise<DiscoveryResult> {
   return postJson<DiscoveryResult>("/api/discover", { url })
 }
 
-export function createTestPlan(discovery: DiscoveryResult): Promise<TestPlan> {
+export function exploreApplication(url: string): Promise<ExplorationResult> {
+  return postJson<ExplorationResult>("/api/explore", { url })
+}
+
+export function createTestPlan(discovery: DiscoveryResult | ExplorationResult): Promise<TestPlan> {
   return postJson<TestPlan>("/api/test-plans", discovery)
 }
 

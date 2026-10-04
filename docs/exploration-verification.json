@@ -1,0 +1,868 @@
+{
+  "lifePlanner": {
+    "singlePageStatus": 200,
+    "metadataUnchanged": true,
+    "baseline": {
+      "metadata": {
+        "title": "AI Life Planner - Your life, planned intelligently",
+        "url": "https://ai-life-planner-seven.vercel.app/",
+        "inputs": [],
+        "buttons": [
+          {
+            "text": "✦ AI LIFE PLANNER",
+            "type": "button",
+            "name": null,
+            "disabled": false
+          },
+          {
+            "text": "Sign in",
+            "type": "button",
+            "name": null,
+            "disabled": false
+          },
+          {
+            "text": "Get Started →",
+            "type": "button",
+            "name": null,
+            "disabled": false
+          }
+        ],
+        "links": [],
+        "forms": [],
+        "visibleText": {
+          "headings": [
+            {
+              "level": 1,
+              "text": "Make time for the life you actually want."
+            },
+            {
+              "level": 2,
+              "text": "Planning that sees the bigger picture."
+            },
+            {
+              "level": 3,
+              "text": "AI Planning"
+            },
+            {
+              "level": 3,
+              "text": "Smart Calendar"
+            },
+            {
+              "level": 3,
+              "text": "Goals"
+            },
+            {
+              "level": 3,
+              "text": "Health & Fitness"
+            }
+          ],
+          "paragraphs": [
+            "YOUR LIFE, PLANNED INTELLIGENTLY",
+            "Plan your work, health, fitness, meals and goals with an AI assistant that understands how your days fit together.",
+            "Private by design · Set up in minutes",
+            "Leave by 8:10 AM. Gym fits best after work.",
+            "Breakfast",
+            "Focused work",
+            "Lunch",
+            "Gym",
+            "ONE PLACE FOR YOUR WHOLE LIFE",
+            "Turn your priorities and routines into a realistic daily plan.",
+            "See work, travel, habits and personal time in one clear schedule.",
+            "Break meaningful goals into milestones you can complete.",
+            "Make room for meals, movement, recovery and better habits."
+          ]
+        }
+      },
+      "screenshotBytes": 536840
+    },
+    "current": {
+      "metadata": {
+        "title": "AI Life Planner - Your life, planned intelligently",
+        "url": "https://ai-life-planner-seven.vercel.app/",
+        "inputs": [],
+        "buttons": [
+          {
+            "text": "✦ AI LIFE PLANNER",
+            "type": "button",
+            "name": null,
+            "disabled": false
+          },
+          {
+            "text": "Sign in",
+            "type": "button",
+            "name": null,
+            "disabled": false
+          },
+          {
+            "text": "Get Started →",
+            "type": "button",
+            "name": null,
+            "disabled": false
+          }
+        ],
+        "links": [],
+        "forms": [],
+        "visibleText": {
+          "headings": [
+            {
+              "level": 1,
+              "text": "Make time for the life you actually want."
+            },
+            {
+              "level": 2,
+              "text": "Planning that sees the bigger picture."
+            },
+            {
+              "level": 3,
+              "text": "AI Planning"
+            },
+            {
+              "level": 3,
+              "text": "Smart Calendar"
+            },
+            {
+              "level": 3,
+              "text": "Goals"
+            },
+            {
+              "level": 3,
+              "text": "Health & Fitness"
+            }
+          ],
+          "paragraphs": [
+            "YOUR LIFE, PLANNED INTELLIGENTLY",
+            "Plan your work, health, fitness, meals and goals with an AI assistant that understands how your days fit together.",
+            "Private by design · Set up in minutes",
+            "Leave by 8:10 AM. Gym fits best after work.",
+            "Breakfast",
+            "Focused work",
+            "Lunch",
+            "Gym",
+            "ONE PLACE FOR YOUR WHOLE LIFE",
+            "Turn your priorities and routines into a realistic daily plan.",
+            "See work, travel, habits and personal time in one clear schedule.",
+            "Break meaningful goals into milestones you can complete.",
+            "Make room for meals, movement, recovery and better habits."
+          ]
+        }
+      },
+      "screenshotBytes": 536840
+    }
+  },
+  "lifePlannerExploration": {
+    "status": 200,
+    "body": {
+      "startUrl": "https://ai-life-planner-seven.vercel.app/",
+      "pages": [
+        {
+          "title": "AI Life Planner - Your life, planned intelligently",
+          "url": "https://ai-life-planner-seven.vercel.app/",
+          "inputs": [],
+          "buttons": [
+            {
+              "text": "✦ AI LIFE PLANNER",
+              "type": "button",
+              "name": null,
+              "disabled": false
+            },
+            {
+              "text": "Sign in",
+              "type": "button",
+              "name": null,
+              "disabled": false
+            },
+            {
+              "text": "Get Started →",
+              "type": "button",
+              "name": null,
+              "disabled": false
+            }
+          ],
+          "links": [],
+          "forms": [],
+          "visibleText": {
+            "headings": [
+              {
+                "level": 1,
+                "text": "Make time for the life you actually want."
+              },
+              {
+                "level": 2,
+                "text": "Planning that sees the bigger picture."
+              },
+              {
+                "level": 3,
+                "text": "AI Planning"
+              },
+              {
+                "level": 3,
+                "text": "Smart Calendar"
+              },
+              {
+                "level": 3,
+                "text": "Goals"
+              },
+              {
+                "level": 3,
+                "text": "Health & Fitness"
+              }
+            ],
+            "paragraphs": [
+              "YOUR LIFE, PLANNED INTELLIGENTLY",
+              "Plan your work, health, fitness, meals and goals with an AI assistant that understands how your days fit together.",
+              "Private by design · Set up in minutes",
+              "Leave by 8:10 AM. Gym fits best after work.",
+              "Breakfast",
+              "Focused work",
+              "Lunch",
+              "Gym",
+              "ONE PLACE FOR YOUR WHOLE LIFE",
+              "Turn your priorities and routines into a realistic daily plan.",
+              "See work, travel, habits and personal time in one clear schedule.",
+              "Break meaningful goals into milestones you can complete.",
+              "Make room for meals, movement, recovery and better habits."
+            ]
+          },
+          "id": "state-1",
+          "depth": 0
+        },
+        {
+          "title": "AI Life Planner - Your life, planned intelligently",
+          "url": "https://ai-life-planner-seven.vercel.app/auth",
+          "inputs": [
+            {
+              "type": "text",
+              "name": null,
+              "id": null,
+              "placeholder": null,
+              "label": "Full name",
+              "required": true,
+              "disabled": false
+            },
+            {
+              "type": "text",
+              "name": null,
+              "id": null,
+              "placeholder": null,
+              "label": "Home address",
+              "required": false,
+              "disabled": false
+            },
+            {
+              "type": "text",
+              "name": null,
+              "id": null,
+              "placeholder": null,
+              "label": "Work address",
+              "required": false,
+              "disabled": false
+            },
+            {
+              "type": "tel",
+              "name": null,
+              "id": null,
+              "placeholder": null,
+              "label": "Phone optional",
+              "required": false,
+              "disabled": false
+            },
+            {
+              "type": "email",
+              "name": null,
+              "id": null,
+              "placeholder": null,
+              "label": "Email",
+              "required": true,
+              "disabled": false
+            },
+            {
+              "type": "password",
+              "name": null,
+              "id": null,
+              "placeholder": null,
+              "label": "Password",
+              "required": true,
+              "disabled": false
+            }
+          ],
+          "buttons": [
+            {
+              "text": "Sign up",
+              "type": "button",
+              "name": null,
+              "disabled": false
+            },
+            {
+              "text": "Log in",
+              "type": "button",
+              "name": null,
+              "disabled": false
+            },
+            {
+              "text": "Create account",
+              "type": "submit",
+              "name": null,
+              "disabled": false
+            }
+          ],
+          "links": [
+            {
+              "text": "Continue with Google",
+              "href": "https://ai-life-planner-seven.vercel.app/api/auth/google"
+            }
+          ],
+          "forms": [
+            {
+              "action": "https://ai-life-planner-seven.vercel.app/auth",
+              "method": "GET",
+              "name": null,
+              "id": null,
+              "controls": 7
+            }
+          ],
+          "visibleText": {
+            "headings": [
+              {
+                "level": 1,
+                "text": "Create your account"
+              }
+            ],
+            "paragraphs": [
+              "Add the details your planner needs to understand your day."
+            ]
+          },
+          "id": "state-2",
+          "depth": 1
+        },
+        {
+          "title": "AI Life Planner - Your life, planned intelligently",
+          "url": "https://ai-life-planner-seven.vercel.app/auth",
+          "inputs": [
+            {
+              "type": "email",
+              "name": null,
+              "id": null,
+              "placeholder": null,
+              "label": "Email",
+              "required": true,
+              "disabled": false
+            },
+            {
+              "type": "password",
+              "name": null,
+              "id": null,
+              "placeholder": null,
+              "label": "Password",
+              "required": true,
+              "disabled": false
+            }
+          ],
+          "buttons": [
+            {
+              "text": "Sign up",
+              "type": "button",
+              "name": null,
+              "disabled": false
+            },
+            {
+              "text": "Log in",
+              "type": "button",
+              "name": null,
+              "disabled": false
+            },
+            {
+              "text": "Forgot password?",
+              "type": "button",
+              "name": null,
+              "disabled": false
+            },
+            {
+              "text": "Log in",
+              "type": "submit",
+              "name": null,
+              "disabled": false
+            }
+          ],
+          "links": [
+            {
+              "text": "Continue with Google",
+              "href": "https://ai-life-planner-seven.vercel.app/api/auth/google"
+            }
+          ],
+          "forms": [
+            {
+              "action": "https://ai-life-planner-seven.vercel.app/auth",
+              "method": "GET",
+              "name": null,
+              "id": null,
+              "controls": 4
+            }
+          ],
+          "visibleText": {
+            "headings": [
+              {
+                "level": 1,
+                "text": "Welcome back"
+              }
+            ],
+            "paragraphs": [
+              "Sign in to continue to your planner."
+            ]
+          },
+          "id": "state-3",
+          "depth": 2
+        }
+      ],
+      "transitions": [
+        {
+          "fromStateId": "state-1",
+          "toStateId": "state-2",
+          "control": {
+            "kind": "button",
+            "text": "Get Started →"
+          }
+        },
+        {
+          "fromStateId": "state-1",
+          "toStateId": "state-2",
+          "control": {
+            "kind": "button",
+            "text": "Sign in"
+          }
+        },
+        {
+          "fromStateId": "state-2",
+          "toStateId": "state-3",
+          "control": {
+            "kind": "button",
+            "text": "Log in"
+          }
+        }
+      ],
+      "limits": {
+        "maxPages": 5,
+        "maxDepth": 2,
+        "timeoutMs": 60000,
+        "maxInteractions": 20
+      },
+      "completionReason": "depth-limit",
+      "warnings": [
+        "Only HTTP and HTTPS URLs are supported"
+      ]
+    }
+  },
+  "sauceDemo": {
+    "singlePageStatus": 200,
+    "metadataUnchanged": true,
+    "baseline": {
+      "metadata": {
+        "title": "Swag Labs",
+        "url": "https://www.saucedemo.com/",
+        "inputs": [
+          {
+            "type": "text",
+            "name": "user-name",
+            "id": "user-name",
+            "placeholder": "Username",
+            "label": null,
+            "required": false,
+            "disabled": false
+          },
+          {
+            "type": "password",
+            "name": "password",
+            "id": "password",
+            "placeholder": "Password",
+            "label": null,
+            "required": false,
+            "disabled": false
+          },
+          {
+            "type": "submit",
+            "name": "login-button",
+            "id": "login-button",
+            "placeholder": null,
+            "label": null,
+            "required": false,
+            "disabled": false
+          }
+        ],
+        "buttons": [
+          {
+            "text": "Login",
+            "type": "submit",
+            "name": "login-button",
+            "disabled": false
+          }
+        ],
+        "links": [],
+        "forms": [
+          {
+            "action": "https://www.saucedemo.com/",
+            "method": "GET",
+            "name": null,
+            "id": null,
+            "controls": 3
+          }
+        ],
+        "visibleText": {
+          "headings": [
+            {
+              "level": 4,
+              "text": "Accepted usernames are:"
+            },
+            {
+              "level": 4,
+              "text": "Password for all users:"
+            }
+          ],
+          "paragraphs": []
+        }
+      },
+      "screenshotBytes": 28882
+    },
+    "current": {
+      "metadata": {
+        "title": "Swag Labs",
+        "url": "https://www.saucedemo.com/",
+        "inputs": [
+          {
+            "type": "text",
+            "name": "user-name",
+            "id": "user-name",
+            "placeholder": "Username",
+            "label": null,
+            "required": false,
+            "disabled": false
+          },
+          {
+            "type": "password",
+            "name": "password",
+            "id": "password",
+            "placeholder": "Password",
+            "label": null,
+            "required": false,
+            "disabled": false
+          },
+          {
+            "type": "submit",
+            "name": "login-button",
+            "id": "login-button",
+            "placeholder": null,
+            "label": null,
+            "required": false,
+            "disabled": false
+          }
+        ],
+        "buttons": [
+          {
+            "text": "Login",
+            "type": "submit",
+            "name": "login-button",
+            "disabled": false
+          }
+        ],
+        "links": [],
+        "forms": [
+          {
+            "action": "https://www.saucedemo.com/",
+            "method": "GET",
+            "name": null,
+            "id": null,
+            "controls": 3
+          }
+        ],
+        "visibleText": {
+          "headings": [
+            {
+              "level": 4,
+              "text": "Accepted usernames are:"
+            },
+            {
+              "level": 4,
+              "text": "Password for all users:"
+            }
+          ],
+          "paragraphs": []
+        }
+      },
+      "screenshotBytes": 28882
+    }
+  },
+  "sauceDemoExploration": {
+    "status": 200,
+    "body": {
+      "startUrl": "https://www.saucedemo.com/",
+      "pages": [
+        {
+          "title": "Swag Labs",
+          "url": "https://www.saucedemo.com/",
+          "inputs": [
+            {
+              "type": "text",
+              "name": "user-name",
+              "id": "user-name",
+              "placeholder": "Username",
+              "label": null,
+              "required": false,
+              "disabled": false
+            },
+            {
+              "type": "password",
+              "name": "password",
+              "id": "password",
+              "placeholder": "Password",
+              "label": null,
+              "required": false,
+              "disabled": false
+            },
+            {
+              "type": "submit",
+              "name": "login-button",
+              "id": "login-button",
+              "placeholder": null,
+              "label": null,
+              "required": false,
+              "disabled": false
+            }
+          ],
+          "buttons": [
+            {
+              "text": "Login",
+              "type": "submit",
+              "name": "login-button",
+              "disabled": false
+            }
+          ],
+          "links": [],
+          "forms": [
+            {
+              "action": "https://www.saucedemo.com/",
+              "method": "GET",
+              "name": null,
+              "id": null,
+              "controls": 3
+            }
+          ],
+          "visibleText": {
+            "headings": [
+              {
+                "level": 4,
+                "text": "Accepted usernames are:"
+              },
+              {
+                "level": 4,
+                "text": "Password for all users:"
+              }
+            ],
+            "paragraphs": []
+          },
+          "id": "state-1",
+          "depth": 0
+        }
+      ],
+      "transitions": [],
+      "limits": {
+        "maxPages": 5,
+        "maxDepth": 2,
+        "timeoutMs": 60000,
+        "maxInteractions": 20
+      },
+      "completionReason": "complete",
+      "warnings": []
+    }
+  },
+  "lifePlannerPlan": {
+    "status": 200,
+    "body": {
+      "pagePurpose": "Introduce an AI-assisted life planner for work, schedules, goals, health, fitness, and meals, and provide account-registration and login entry points. The exploration reached the landing page and authentication forms, but not planner features, submission results, or validation states.",
+      "tests": [
+        {
+          "id": "landing-purpose-and-features",
+          "title": "Present the planner's purpose and advertised feature areas",
+          "category": "content",
+          "reason": "Confirm that visitors can understand the product's scope without assuming its advertised planning workflows are accessible.",
+          "expectedOutcome": "The landing page displays its main value proposition and the four observed feature headings.",
+          "actions": [
+            {
+              "type": "navigate",
+              "url": "https://ai-life-planner-seven.vercel.app/"
+            },
+            {
+              "type": "assertText",
+              "target": "Main heading",
+              "text": "Make time for the life you actually want."
+            },
+            {
+              "type": "assertText",
+              "target": "Feature section heading",
+              "text": "Planning that sees the bigger picture."
+            },
+            {
+              "type": "assertText",
+              "target": "AI Planning feature heading",
+              "text": "AI Planning"
+            },
+            {
+              "type": "assertText",
+              "target": "Smart Calendar feature heading",
+              "text": "Smart Calendar"
+            },
+            {
+              "type": "assertText",
+              "target": "Goals feature heading",
+              "text": "Goals"
+            },
+            {
+              "type": "assertText",
+              "target": "Health & Fitness feature heading",
+              "text": "Health & Fitness"
+            }
+          ]
+        },
+        {
+          "id": "get-started-registration-fields",
+          "title": "Open registration and enter required and optional details without submitting",
+          "category": "functional",
+          "reason": "Exercise the primary onboarding entry point and every discovered registration field without creating an account.",
+          "expectedOutcome": "Get Started opens the account-creation form at /auth. Its fields accept entry, and the account-creation heading remains visible without submission.",
+          "actions": [
+            {
+              "type": "navigate",
+              "url": "https://ai-life-planner-seven.vercel.app/"
+            },
+            {
+              "type": "click",
+              "target": "Get Started →"
+            },
+            {
+              "type": "assertUrl",
+              "url": "https://ai-life-planner-seven.vercel.app/auth"
+            },
+            {
+              "type": "assertText",
+              "target": "Registration heading",
+              "text": "Create your account"
+            },
+            {
+              "type": "fill",
+              "target": "Full name",
+              "value": "Alex Taylor"
+            },
+            {
+              "type": "fill",
+              "target": "Home address",
+              "value": "123 Example Street"
+            },
+            {
+              "type": "fill",
+              "target": "Work address",
+              "value": "456 Sample Avenue"
+            },
+            {
+              "type": "fill",
+              "target": "Phone optional",
+              "value": "+12025550123"
+            },
+            {
+              "type": "fill",
+              "target": "Email",
+              "value": "alex.taylor@example.com"
+            },
+            {
+              "type": "fill",
+              "target": "Password",
+              "value": "ExampleOnly!4827"
+            },
+            {
+              "type": "assertText",
+              "target": "Registration heading",
+              "text": "Create your account"
+            }
+          ]
+        },
+        {
+          "id": "sign-in-entry-observed-destination",
+          "title": "Verify the observed destination of the landing-page Sign in button",
+          "category": "navigation",
+          "reason": "The recorded Sign in transition opens registration rather than the login state; this distinct entry-point behavior should be checked explicitly.",
+          "expectedOutcome": "Sign in opens /auth with the Create your account heading and registration explanation, matching the observed transition.",
+          "actions": [
+            {
+              "type": "navigate",
+              "url": "https://ai-life-planner-seven.vercel.app/"
+            },
+            {
+              "type": "click",
+              "target": "Sign in"
+            },
+            {
+              "type": "assertUrl",
+              "url": "https://ai-life-planner-seven.vercel.app/auth"
+            },
+            {
+              "type": "assertText",
+              "target": "Registration heading",
+              "text": "Create your account"
+            },
+            {
+              "type": "assertText",
+              "target": "Registration introductory paragraph",
+              "text": "Add the details your planner needs to understand your day."
+            }
+          ]
+        },
+        {
+          "id": "switch-to-login-and-enter-credentials",
+          "title": "Switch from registration to login and enter credentials without submitting",
+          "category": "functional",
+          "reason": "Exercise the recorded authentication-mode transition, which changes visible state without changing the URL, and the discovered login fields.",
+          "expectedOutcome": "Log in switches the registration form to the Welcome back state at the same /auth URL. Email and password entry is possible without attempting authentication.",
+          "actions": [
+            {
+              "type": "navigate",
+              "url": "https://ai-life-planner-seven.vercel.app/"
+            },
+            {
+              "type": "click",
+              "target": "Get Started →"
+            },
+            {
+              "type": "click",
+              "target": "Log in"
+            },
+            {
+              "type": "assertUrl",
+              "url": "https://ai-life-planner-seven.vercel.app/auth"
+            },
+            {
+              "type": "assertText",
+              "target": "Login heading",
+              "text": "Welcome back"
+            },
+            {
+              "type": "fill",
+              "target": "Email",
+              "value": "alex.taylor@example.com"
+            },
+            {
+              "type": "fill",
+              "target": "Password",
+              "value": "ExampleOnly!4827"
+            },
+            {
+              "type": "assertText",
+              "target": "Login introductory paragraph",
+              "text": "Sign in to continue to your planner."
+            },
+            {
+              "type": "assertText",
+              "target": "Forgot password? button",
+              "text": "Forgot password?"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

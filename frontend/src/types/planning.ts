@@ -46,6 +46,23 @@ export interface DiscoveryResult {
   }
 }
 
+export interface ExplorationResult {
+  startUrl: string
+  pages: (Omit<DiscoveryResult, "screenshot" | "visibleText"> & {
+    id: string
+    depth: number
+    visibleText: NonNullable<DiscoveryResult["visibleText"]>
+  })[]
+  transitions: {
+    fromStateId: string
+    toStateId: string
+    control: { kind: "button" | "link"; text: string; href?: string }
+  }[]
+  limits: { maxPages: number; maxDepth: number; timeoutMs: number; maxInteractions: number }
+  completionReason: "complete" | "page-limit" | "depth-limit" | "time-limit" | "interaction-limit"
+  warnings: string[]
+}
+
 export type TestAction =
   | { type: "click"; target: string }
   | { type: "fill"; target: string; value: string }

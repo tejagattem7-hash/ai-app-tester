@@ -2,14 +2,14 @@ import { Router } from "express"
 import { z } from "zod"
 import { getConfiguredTestPlanningProvider } from "../providers/llm/configured-provider.js"
 import { LlmConfigurationError, LlmProviderError } from "../providers/llm/test-planning.provider.js"
-import { discoveryResultSchema } from "../schemas/discovery-result.schema.js"
+import { planningDiscoverySchema } from "../schemas/exploration-result.schema.js"
 import { createTestPlan, InvalidTestPlanError } from "../services/test-planning.service.js"
 
 export const testPlansRouter = Router()
 
 testPlansRouter.post("/", async (request, response) => {
   try {
-    const discovery = discoveryResultSchema.parse(request.body)
+    const discovery = planningDiscoverySchema.parse(request.body)
     const plan = await createTestPlan(discovery, getConfiguredTestPlanningProvider())
     response.json(plan)
   } catch (error) {
