@@ -1,10 +1,10 @@
 import { z } from "zod"
-import { testPlanSchema } from "./test-plan.schema.js"
+import { testPlanWithContextSchema } from "./test-plan.schema.js"
 import { testRunResultSchema } from "./test-run.schema.js"
 
 export const evaluationRequestSchema = z.object({
   url: z.string().url().max(2048),
-  plan: testPlanSchema,
+  plan: testPlanWithContextSchema,
   run: testRunResultSchema,
 }).strict().superRefine((value, context) => {
   const scenarioIds = new Set(value.plan.tests.map((scenario) => scenario.id))

@@ -169,6 +169,7 @@ export interface AuthenticationNetworkGuard {
   rejected: boolean
   sessionExpired: boolean
   redirectedToLogin: boolean
+  crossOriginRedirect?: boolean
   loginUrl?: string
   protectedUrl?: string
   formAction?: string
@@ -200,7 +201,7 @@ function containsCredentials(url: URL, guard: AuthenticationNetworkGuard): boole
 export async function withDiscoverySession<T>(
   rawUrl: string,
   inspect: (session: DiscoverySession) => Promise<T>,
-  options: { sameOriginOnly?: boolean; timeoutMs?: number; authentication?: AuthenticationNetworkGuard } = {},
+  options: { sameOriginOnly?: boolean; timeoutMs?: number; authentication?: AuthenticationNetworkGuard; signal?: AbortSignal } = {},
   dependencies: DiscoveryDependencies = defaultDependencies,
 ): Promise<T> {
   if (activeDiscoveries >= MAX_CONCURRENT_DISCOVERIES) throw new DiscoveryCapacityError()
@@ -212,6 +213,12 @@ export async function withDiscoverySession<T>(
   let page: Page | undefined
   let expired = false
   let timer: ReturnType<typeof setTimeout> | undefined
+  let onAbort: (() => void) | undefined
+  const cancelled = new Promise<never>((_resolve, reject) => {
+    onAbort = () => { expired = true; reject(new DiscoveryBudgetError()) }
+    if (options.signal?.aborted) onAbort()
+    else options.signal?.addEventListener("abort", onAbort, { once: true })
+  })
   const deadline = options.timeoutMs ? Date.now() + options.timeoutMs : Infinity
   const remainingTimeMs = () => {
     if (expired || Date.now() >= deadline) throw new DiscoveryBudgetError()
@@ -219,6 +226,7 @@ export async function withDiscoverySession<T>(
   }
 
   const work = async () => {
+    if (expired) throw new DiscoveryBudgetError()
     const initialUrl = await dependencies.validateUrl(rawUrl)
     if (expired) throw new DiscoveryBudgetError()
     browser = await dependencies.launchBrowser(remainingTimeMs())
@@ -245,6 +253,7 @@ export async function withDiscoverySession<T>(
         const auth = options.authentication
         // In credential mode every request stays on the pinned origin. A single
         // credential-bearing login POST is the only allowed mutating request.
+        if (auth && request.isNavigationRequest() && requestUrl.origin !== initialUrl.origin) auth.crossOriginRedirect = true
         if (auth && (requestUrl.origin !== initialUrl.origin || containsCredentials(requestUrl, auth)
           || isExternalAuthenticationControl(requestUrl.pathname))) return await route.abort("blockedbyclient")
         const loginPost = auth && request.method() === "POST" && allowsLoginPost(auth, requestUrl, request.postData())
@@ -279,6 +288,10 @@ export async function withDiscoverySession<T>(
                 authRedirects += 1
                 if (authRedirects > MAX_AUTH_REDIRECTS || (loginPost && [307, 308].includes(fetched.status()))) throw new AuthenticationError("authentication-unconfirmed")
                 const next = new URL(fetched.headers().location ?? "", finalUrl)
+                if (next.origin !== initialUrl.origin && (loginPost || request.isNavigationRequest())) {
+                  auth.crossOriginRedirect = true
+                  throw new AuthenticationError("authentication-cross-origin-redirect")
+                }
                 if (next.origin !== initialUrl.origin || next.username || next.password || containsCredentials(next, auth)
                   || isExternalAuthenticationControl(next.pathname)
                   || (auth.authenticated ? hasAuthenticatedMutationIntent : hasHighRiskIntent)(`${next.pathname} ${next.search}`)) {
@@ -352,9 +365,10 @@ export async function withDiscoverySession<T>(
   }
 
   try {
-    if (!options.timeoutMs) return await work()
+    if (!options.timeoutMs) return await Promise.race([work(), cancelled])
     return await Promise.race([
       work(),
+      cancelled,
       new Promise<never>((_resolve, reject) => {
         timer = setTimeout(() => {
           expired = true
@@ -364,8 +378,9 @@ export async function withDiscoverySession<T>(
     ])
   } catch (error) {
     if (options.authentication) {
+      if (options.authentication.crossOriginRedirect) throw new AuthenticationError("authentication-cross-origin-redirect")
       if (error instanceof AuthenticationError || error instanceof DiscoveryCapacityError || error instanceof PublicUrlError || error instanceof DiscoveryBudgetError) throw error
-      throw new AuthenticationError("authentication-unconfirmed")
+      throw new AuthenticationError("authenticated-exploration-failed")
     }
     if (error instanceof PublicUrlError || error instanceof DiscoveryNavigationError || error instanceof DiscoveryBudgetError) throw error
     if (error instanceof errors.TimeoutError) {
@@ -374,6 +389,7 @@ export async function withDiscoverySession<T>(
     throw new DiscoveryNavigationError(error instanceof Error ? error.message : "Unable to inspect the page")
   } finally {
     expired = true
+    if (onAbort) options.signal?.removeEventListener("abort", onAbort)
     if (timer) clearTimeout(timer)
     // Each cleanup runs even if the previous one fails; capacity is always released.
     try {

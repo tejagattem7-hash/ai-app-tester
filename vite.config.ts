@@ -13,7 +13,8 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      "/api": "http://localhost:3001",
+      // Keep the browser-facing Host for the backend's workflow origin check.
+      "/api": { target: "http://localhost:3001", changeOrigin: false },
     },
   },
   build: {

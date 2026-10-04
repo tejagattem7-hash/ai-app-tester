@@ -1,13 +1,13 @@
 import { createHash } from "node:crypto"
 import type { Page } from "playwright"
-import { AuthenticationError, getTestCredentials, MAX_AUTH_ENTRY_DEPTH, MAX_AUTH_ENTRY_STATES } from "../config/authentication.js"
+import { AuthenticationError, getTestCredentials, MAX_AUTH_ENTRY_DEPTH, MAX_AUTH_ENTRY_STATES, type LoginCredentials } from "../config/authentication.js"
 import { EXPLORATION_ACTION_TIMEOUT_MS, EXPLORATION_TIMEOUT_MS, MAX_EXPLORATION_DEPTH, MAX_EXPLORATION_INTERACTIONS, MAX_EXPLORATION_PAGES } from "../config/exploration.js"
 import { explorationResultSchema, type ExploredPage, type ExplorationResult, type NavigationControl } from "../schemas/exploration-result.schema.js"
 import { isExternalAuthenticationControl, isSafeAuthenticatedNavigationControl, isSafeNavigationControl } from "../utils/exploration-safety.js"
 import { SecretRedactor } from "../utils/secret-redaction.js"
-import { assertPublicHttpUrl } from "../utils/public-url.js"
+import { assertPublicHttpUrl, PublicUrlError } from "../utils/public-url.js"
 import { authenticate, findLoginControls, rememberSessionSecrets } from "./authentication.service.js"
-import { DiscoveryBudgetError, DiscoveryNavigationError, extractPageDetails, waitForRenderedPage, withDiscoverySession, type AuthenticationNetworkGuard, type DiscoveryDependencies, type DiscoverySession } from "./discovery.service.js"
+import { DiscoveryBudgetError, DiscoveryCapacityError, DiscoveryNavigationError, extractPageDetails, waitForRenderedPage, withDiscoverySession, type AuthenticationNetworkGuard, type DiscoveryDependencies, type DiscoverySession } from "./discovery.service.js"
 
 const CONTROL_SELECTOR = "body button, body input[type='button'], body input[type='submit'], body input[type='reset'], body a[href]"
 const MAX_CANDIDATES_PER_STATE = 200
@@ -41,7 +41,7 @@ export function stateFingerprint(page: Omit<ExploredPage, "id" | "depth">): stri
   })).digest("hex")
 }
 
-async function safeCandidates(page: Page, origin: string, authenticated = false): Promise<Candidate[]> {
+export async function safeCandidates(page: Page, origin: string, authenticated = false): Promise<Candidate[]> {
   const controls = await page.evaluate(({ selector, limit }) => {
     const result = []
     const elements = document.querySelectorAll<HTMLButtonElement | HTMLInputElement | HTMLAnchorElement>(selector)
@@ -80,6 +80,7 @@ async function safeCandidates(page: Page, origin: string, authenticated = false)
 }
 
 async function validateState(session: DiscoverySession, dependencies?: DiscoveryDependencies): Promise<void> {
+  if (session.authentication?.crossOriginRedirect) throw new AuthenticationError("authentication-cross-origin-redirect")
   if (session.authentication?.authenticated) {
     if (session.authentication.redirectedToLogin || (session.authentication.loginUrl && session.authentication.protectedUrl !== session.authentication.loginUrl
       && session.page.url() === session.authentication.loginUrl)) throw new AuthenticationError("protected-page-redirected")
@@ -89,7 +90,7 @@ async function validateState(session: DiscoverySession, dependencies?: Discovery
   if (url.origin !== session.initialUrl.origin) throw new DiscoveryNavigationError("Navigation left the starting origin")
 }
 
-async function settlePage(session: DiscoverySession): Promise<void> {
+export async function settlePage(session: DiscoverySession): Promise<void> {
   await session.followValidatedRedirect?.()
   await session.page.waitForLoadState("domcontentloaded", { timeout: session.remainingTimeMs() })
   try {
@@ -103,13 +104,13 @@ async function settlePage(session: DiscoverySession): Promise<void> {
   }
 }
 
-async function captureState(session: DiscoverySession, dependencies?: DiscoveryDependencies): Promise<Omit<ExploredPage, "id" | "depth">> {
+export async function captureState(session: DiscoverySession, dependencies?: DiscoveryDependencies): Promise<Omit<ExploredPage, "id" | "depth">> {
   await validateState(session, dependencies)
   const [title, details] = await Promise.all([session.page.title(), extractPageDetails(session.page)])
   return { title, url: session.page.url(), ...details, visibleText: details.visibleText ?? { headings: [], paragraphs: [] } }
 }
 
-async function followCandidate(session: DiscoverySession, candidate: Candidate, beforeClick: () => void, dependencies?: DiscoveryDependencies, authenticated = false): Promise<void> {
+export async function followCandidate(session: DiscoverySession, candidate: Candidate, beforeClick: () => void, dependencies?: DiscoveryDependencies, authenticated = false): Promise<void> {
   // Recheck the live DOM before every click, including path replay. Never click
   // an element just because a previous document had a safe control at its index.
   const liveCandidates = await safeCandidates(session.page, session.initialUrl.origin, authenticated)
@@ -155,8 +156,11 @@ function emptyExploration(rawUrl: string): ExplorationResult {
   }
 }
 
-export async function exploreApplication(rawUrl: string, dependencies?: DiscoveryDependencies, options: { authenticated?: boolean } = {}): Promise<ExplorationResult> {
-  const credentials = options.authenticated ? getTestCredentials(rawUrl) : undefined
+export async function exploreApplication(rawUrl: string, dependencies?: DiscoveryDependencies, options: {
+  authenticated?: boolean; credentials?: LoginCredentials; signal?: AbortSignal
+  inspectAuthenticated?: (session: DiscoverySession, redactor: SecretRedactor, beforeInteraction: () => void) => Promise<void>
+} = {}): Promise<ExplorationResult> {
+  const credentials = options.authenticated ? getTestCredentials(rawUrl, options.credentials) : undefined
   const redactor = credentials ? new SecretRedactor([credentials.username, credentials.password]) : undefined
   const guard: AuthenticationNetworkGuard | undefined = credentials ? {
     username: credentials.username, password: credentials.password, submissionActive: false,
@@ -288,15 +292,20 @@ export async function exploreApplication(rawUrl: string, dependencies?: Discover
         if (new URL(protectedUrl).search || new URL(protectedUrl).hash) throw new AuthenticationError("authentication-unconfirmed")
         result = emptyExploration(protectedUrl)
         result.authentication = { status: "authenticated", execution: "discovery-only" }
-        await walk(protectedUrl)
+        if (options.inspectAuthenticated) {
+          result.pages.push({ ...await capture(), id: "state-1", depth: 0 })
+          await options.inspectAuthenticated(session, redactor!, beforeClick)
+        } else await walk(protectedUrl)
       } else await walk(session.initialUrl.href)
-    }, { sameOriginOnly: true, timeoutMs: EXPLORATION_TIMEOUT_MS, authentication: guard }, dependencies)
+    }, { sameOriginOnly: true, timeoutMs: EXPLORATION_TIMEOUT_MS, authentication: guard, signal: options.signal }, dependencies)
   } catch (error) {
+    if (options.inspectAuthenticated || options.signal?.aborted) throw error
     // Return useful partial observations at the deadline, but never invent an
     // initial state if the application did not become discoverable in time.
+    if (error instanceof PublicUrlError || error instanceof DiscoveryCapacityError) throw error
     if (credentials && (!guard?.authenticated || !result.authentication)) {
       if (error instanceof AuthenticationError) throw error
-      throw new AuthenticationError("authentication-unconfirmed")
+      throw new AuthenticationError("authenticated-exploration-failed")
     }
     if (error instanceof ExplorationInteractionLimitError && result.pages.length) {
       result.completionReason = "interaction-limit"

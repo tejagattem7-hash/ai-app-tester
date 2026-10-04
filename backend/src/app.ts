@@ -4,6 +4,7 @@ import { exploreRouter } from "./routes/explore.route.js"
 import { evaluationsRouter } from "./routes/evaluations.route.js"
 import { testPlansRouter } from "./routes/test-plans.route.js"
 import { testRunsRouter } from "./routes/test-runs.route.js"
+import { authWorkflowsRouter } from "./routes/auth-workflows.route.js"
 
 export const app = express()
 
@@ -17,6 +18,7 @@ app.use("/api/explore", exploreRouter)
 app.use("/api/evaluations", evaluationsRouter)
 app.use("/api/test-plans", testPlansRouter)
 app.use("/api/test-runs", testRunsRouter)
+app.use("/api/auth-workflows", authWorkflowsRouter)
 
 app.use((_request, response) => {
   response.status(404).json({ error: "Not found" })

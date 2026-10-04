@@ -1,7 +1,7 @@
 import type { TestPlanningLlmProvider } from "../providers/llm/test-planning.provider.js"
 import type { ExplorationResult, PlanningDiscovery } from "../schemas/exploration-result.schema.js"
 import { MAX_TEST_SCENARIOS, testPlanSchema, type TestPlan } from "../schemas/test-plan.schema.js"
-import { configuredSecretRedactor } from "../utils/secret-redaction.js"
+import { configuredSecretRedactor, type SecretRedactor } from "../utils/secret-redaction.js"
 
 export class InvalidTestPlanError extends Error {
   constructor(message: string, options?: ErrorOptions) {
@@ -30,7 +30,7 @@ Rules:
 - Avoid scenarios that test the same behavior with only superficial wording or data changes.
 - Avoid destructive, irreversible, financial, account-creation, or data-deletion actions.
 - End each scenario with at least one assertText or assertUrl action.
-- When authentication.status is authenticated, startUrl is an already authenticated root. Authentication happened separately; never generate login, credentials or session setup actions. Use only recorded read/view/navigation clicks and assertions. Do not fill, select, check or submit authenticated forms. These plans are discovery only and cannot yet run in the executor.
+- When authentication.status is authenticated, startUrl is an already authenticated root. Authentication happened separately; never generate login, credentials or session setup actions. Use only recorded read/view/navigation clicks and assertions. Do not fill, select, check or submit authenticated forms. Execution authorization is handled separately; do not describe execution availability in the plan.
 - Give every scenario a unique lowercase kebab-case id.`
 
 function createModelInput(discovery: PlanningDiscovery): string {
@@ -100,9 +100,10 @@ function validateObservedWorkflow(plan: TestPlan, discovery: ExplorationResult):
 export async function createTestPlan(
   discovery: PlanningDiscovery,
   provider: TestPlanningLlmProvider,
+  workflowRedactor?: SecretRedactor,
 ): Promise<TestPlan> {
   // A second secret boundary protects even client-supplied planning metadata.
-  const redactor = configuredSecretRedactor()
+  const redactor = workflowRedactor ?? configuredSecretRedactor()
   const authenticated = "pages" in discovery && !!discovery.authentication
   discovery = redactor.sanitize(discovery, authenticated)
   const rawPlan = await provider.generateTestPlan({

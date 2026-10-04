@@ -97,6 +97,7 @@ export async function authenticate(
     await controls.submit.click({ timeout: Math.min(AUTH_CONFIRMATION_TIMEOUT_MS, session.remainingTimeMs()) })
     const deadline = Date.now() + Math.min(AUTH_CONFIRMATION_TIMEOUT_MS, session.remainingTimeMs())
     do {
+      if (guard.crossOriginRedirect) throw new AuthenticationError("authentication-cross-origin-redirect")
       await session.followValidatedRedirect?.()
       await session.page.waitForLoadState("domcontentloaded", { timeout: session.remainingTimeMs() })
       try { await waitForRenderedPage(session.page) } catch (error) {
@@ -104,6 +105,7 @@ export async function authenticate(
         continue
       }
       if (guard.rejected) throw new AuthenticationError("authentication-rejected")
+      if (guard.crossOriginRedirect) throw new AuthenticationError("authentication-cross-origin-redirect")
       const after = await capture()
       if (AUTH_CHALLENGE.test([after.url, ...after.visibleText.headings.map((heading) => heading.text),
         ...after.inputs.flatMap((input) => [input.label, input.name, input.placeholder])].join(" "))) {
@@ -120,6 +122,7 @@ export async function authenticate(
     } while (Date.now() < deadline)
     throw new AuthenticationError("authentication-unconfirmed")
   } catch (error) {
+    if (guard.crossOriginRedirect) throw new AuthenticationError("authentication-cross-origin-redirect")
     if (error instanceof AuthenticationError) throw error
     // Playwright fill/click errors can contain the actual entered value.
     throw new AuthenticationError("authentication-unconfirmed")

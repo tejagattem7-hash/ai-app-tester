@@ -5,6 +5,7 @@ import { PageHeader } from "@/components/PageHeader"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { evaluateRun, runTests } from "@/lib/api"
+import { authWorkflowIdFor, clearAuthWorkflow } from "@/lib/auth-workflow"
 import type { ReportNavigationState, RunningNavigationState } from "@/types/execution"
 
 type RunPhase = "running" | "evaluating"
@@ -20,10 +21,18 @@ export function TestRunningPage() {
     if (!state?.url || !state.plan) return
 
     let disposed = false
+    const id = authWorkflowIdFor(state.plan)
+    const controller = new AbortController()
+    let started = false
+    let completed = false
     const timeout = window.setTimeout(() => {
       void (async () => {
         try {
-          const run = await runTests(state.url, state.plan)
+          if (state.plan.execution === "discovery-only" && !id) throw new Error("This authenticated workflow is unavailable. Start a new test and sign in again.")
+          started = true
+          const run = await runTests(state.url, state.plan, id, id ? controller.signal : undefined)
+          completed = true
+          if (id) clearAuthWorkflow(false)
           if (disposed) return
           setPhase("evaluating")
           const evaluation = await evaluateRun(state.url, state.plan, run)
@@ -31,6 +40,7 @@ export function TestRunningPage() {
           const reportState: ReportNavigationState = { ...state, run, evaluation }
           navigate("/report", { state: reportState, replace: true })
         } catch (caughtError) {
+          if (id) clearAuthWorkflow()
           if (!disposed) setError(caughtError instanceof Error ? caughtError.message : "Unable to complete the test run.")
         }
       })()
@@ -39,6 +49,7 @@ export function TestRunningPage() {
     return () => {
       disposed = true
       window.clearTimeout(timeout)
+      if (id && started && !completed) { controller.abort(); clearAuthWorkflow() }
     }
   }, [navigate, state])
 
@@ -71,6 +82,7 @@ export function TestRunningPage() {
           <div><p className="font-semibold">{isEvaluating ? "Evaluating results" : "Running tests"}</p><p className="mt-1 text-sm text-slate-300">{isEvaluating ? "Execution is complete. Preparing the report." : "Each scenario runs independently in an isolated browser context."}</p></div>
         </CardContent>
       </Card>
+      {state.plan.execution === "discovery-only" && <Button variant="outline" onClick={() => { clearAuthWorkflow(); navigate("/") }}>Cancel test</Button>}
     </div>
   )
 }

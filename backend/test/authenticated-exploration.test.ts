@@ -11,6 +11,9 @@ import { exploreApplication } from "../src/services/exploration.service.js"
 import { createTestPlan, InvalidTestPlanError } from "../src/services/test-planning.service.js"
 import { AuthenticatedExecutionUnavailableError, executeTestRun } from "../src/services/test-execution.service.js"
 import { isSafeAuthenticatedNavigationControl } from "../src/utils/exploration-safety.js"
+import { AuthWorkflowStore, WorkflowError } from "../src/services/auth-workflow.service.js"
+import { executeAuthenticatedRun } from "../src/services/authenticated-execution.service.js"
+import { evaluateTestRun } from "../src/services/result-evaluation.service.js"
 
 // Synthetic dedicated fixture credentials only; never a real account.
 const USER = "fixture-test-account@example.test"
@@ -19,7 +22,7 @@ const TOKEN = "fixture-session-token-9638"
 let server: Server
 let baseUrl: string
 let mode: "success" | "reject" | "ambiguous" | "expire" | "redirect" | "native" | "oauth" | "external" | "get" | "loop"
-  | "native-external" | "native-private" | "native-credentials" | "challenge"
+  | "native-external" | "native-private" | "native-credentials" | "challenge" | "client-external" | "changed" | "execution-external"
 let requests: { path: string; method: string; cookie: string }[]
 let browser: Browser | undefined
 let contexts: BrowserContext[]
@@ -54,7 +57,8 @@ before(async () => {
       if (mode === "oauth") return response.end('<h1>Authentication</h1><a href="/api/auth/google">Continue with Google</a>')
       if (mode === "external") return response.end(loginForm.replace('action="/login"', 'action="https://example.org/login"'))
       if (mode === "get") return response.end(loginForm.replace('method="post"', 'method="get"'))
-      return response.end(loginForm + (mode.startsWith("native") || mode === "loop" ? "" : loginScript))
+      return response.end(loginForm + (mode.startsWith("native") || mode === "loop" ? "" : mode === "client-external"
+        ? loginScript.replace("location.href='/workspace'", "location.href='https://example.org/never-request'") : loginScript))
     }
     if ((path === "/api/login" || path === "/login") && request.method === "POST") {
       let body = ""
@@ -78,9 +82,10 @@ before(async () => {
       if (!request.headers.cookie?.includes(`fixture_session=${TOKEN}`)) { response.writeHead(303, { location: "/auth" }); return response.end() }
       if (path !== "/workspace" && mode === "redirect") { response.writeHead(303, { location: "/auth" }); return response.end() }
       if (path !== "/workspace" && mode === "expire") { response.statusCode = 401; return response.end("<h1>Session ended</h1>") }
+      if (path === "/goals" && mode === "execution-external") { response.writeHead(303, { location: "https://example.org/never-request" }); return response.end() }
       if (mode === "ambiguous") return response.end(loginForm)
       if (mode === "challenge") return response.end('<h1>Verify your identity</h1><label>Verification code<input name="otp"></label>')
-      if (path === "/workspace") return response.end(workspace)
+      if (path === "/workspace") return response.end(mode === "changed" ? workspace.replace("Dashboard", "Changed") : workspace)
       return response.end(`<h1>${path === "/calendar" ? "Calendar" : "Goals"}</h1><p>Private saved data</p>`)
     }
     response.statusCode = 404
@@ -139,6 +144,87 @@ const codeIs = (code: string) => (error: unknown) => {
 }
 
 describe("optional authenticated exploration", () => {
+  it("executes associated authenticated scenarios in fresh guarded contexts without leaking secrets", async () => {
+    delete process.env.TEST_AUTH_ORIGIN
+    const credentials = { username: USER, password: PASSWORD }
+    const discovery = await exploreApplication(baseUrl, dependencies, { authenticated: true, credentials })
+    const store = new AuthWorkflowStore()
+    const workflow = store.create("fixture-owner", baseUrl, credentials, discovery)
+    const plan = await createTestPlan(discovery, { async generateTestPlan() {
+      return { pagePurpose: "Dashboard", tests: ["Dashboard", "Goals"].map((text, index) => ({ id: index ? "goals" : "dashboard", title: text, category: "content", reason: "Observed", expectedOutcome: "Visible",
+        actions: [{ type: "navigate", url: discovery.startUrl }, ...(index ? [{ type: "click", target: "Goals" }] : []), { type: "assertText", target: "page", text }] })) }
+    } })
+    store.beginPlanning(workflow.id, workflow.owner, discovery); store.attachPlan(workflow.id, workflow.owner, plan)
+    store.claim(workflow.id, workflow.owner, baseUrl, plan)
+    try {
+      const run = await executeAuthenticatedRun(workflow, dependencies)
+      assert.deepEqual(run.results.map((result) => result.status), ["passed", "passed"])
+      assert.equal(contexts.length, 3)
+      assert.ok(pages.every((page) => page.isClosed()))
+      assert.equal(requests.filter((request) => request.method === "POST").length, 3)
+      const evaluation = evaluateTestRun({ url: baseUrl, plan, run })
+      for (const secret of [USER, PASSWORD, TOKEN, workflow.id]) assert.equal(JSON.stringify({ run, evaluation, plan }).includes(secret), false)
+      assert.equal(requests.some((request) => ["/changed", "/logout", "/share", "/remove"].includes(request.path)), false)
+      assert.throws(() => store.claim(workflow.id, workflow.owner, baseUrl, plan), WorkflowError)
+    } finally { store.remove(workflow.id) }
+  })
+
+  it("fails authenticated execution safely on rejected login, cross-origin redirect and cancellation", async () => {
+    const credentials = { username: USER, password: PASSWORD }
+    const discovery = await exploreApplication(baseUrl, dependencies, { authenticated: true, credentials })
+    const plan = await createTestPlan(discovery, { async generateTestPlan() {
+      return { pagePurpose: "Dashboard", tests: [{ id: "dashboard", title: "Dashboard", category: "content", reason: "Observed", expectedOutcome: "Visible",
+        actions: [{ type: "navigate", url: discovery.startUrl }, { type: "assertText", target: "page", text: "Dashboard" }] }] }
+    } })
+    for (const failure of ["reject", "native-external", "ambiguous"] as const) {
+      mode = failure; requests = []; contexts = []; pages = []
+      const store = new AuthWorkflowStore()
+      const workflow = store.create("owner", baseUrl, credentials, discovery)
+      store.beginPlanning(workflow.id, "owner", discovery); store.attachPlan(workflow.id, "owner", plan); store.claim(workflow.id, "owner", baseUrl, plan)
+      try {
+        const run = executeAuthenticatedRun(workflow, dependencies)
+        const rejected = assert.rejects(run, failure === "ambiguous" ? undefined : codeIs(failure === "reject" ? "authentication-rejected" : "authentication-cross-origin-redirect"))
+        if (failure === "ambiguous") {
+          const deadline = Date.now() + 15000
+          while (!requests.some((request) => request.method === "POST") && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 25))
+          assert.ok(requests.some((request) => request.method === "POST"))
+          store.cancel(workflow.id, "owner")
+        }
+        await rejected
+        assertClosed()
+        assert.equal(requests.some((request) => request.path === "/goals"), false)
+      } finally { store.remove(workflow.id) }
+    }
+  })
+
+  it("sanitizes failed-action findings and blocks cross-origin navigation after login", async () => {
+    const credentials = { username: USER, password: PASSWORD }
+    const discovery = await exploreApplication(baseUrl, dependencies, { authenticated: true, credentials })
+    for (const scenarioMode of ["changed", "execution-external"] as const) {
+      const plan = await createTestPlan(discovery, { async generateTestPlan() {
+        return { pagePurpose: "Dashboard", tests: [{ id: "dashboard", title: "Dashboard", category: "content", reason: "Observed", expectedOutcome: "Visible",
+          actions: [{ type: "navigate", url: discovery.startUrl }, ...(scenarioMode === "execution-external" ? [{ type: "click", target: "Goals" }] : []),
+            { type: "assertText", target: "page", text: scenarioMode === "changed" ? "Dashboard" : "Goals" }] }] }
+      } })
+      mode = scenarioMode
+      const store = new AuthWorkflowStore()
+      const workflow = store.create("owner", baseUrl, credentials, discovery)
+      store.beginPlanning(workflow.id, "owner", discovery); store.attachPlan(workflow.id, "owner", plan); store.claim(workflow.id, "owner", baseUrl, plan)
+      try {
+        if (scenarioMode === "execution-external") {
+          await assert.rejects(() => executeAuthenticatedRun(workflow, dependencies), codeIs("authentication-cross-origin-redirect"))
+        } else {
+          const run = await executeAuthenticatedRun(workflow, dependencies)
+          assert.equal(run.results[0]?.status, "failed")
+          const evaluation = evaluateTestRun({ url: baseUrl, plan, run })
+          assert.equal(evaluation.findings.length, 1)
+          for (const secret of [USER, PASSWORD, TOKEN, workflow.id]) assert.equal(JSON.stringify({ run, evaluation }).includes(secret), false)
+          assert.doesNotMatch(JSON.stringify(run), /Playwright|stack|locator\./)
+        }
+      } finally { store.remove(workflow.id) }
+    }
+  })
+
   it("defaults to disabled and preserves unauthenticated landing/registration/login discovery", async () => {
     assert.equal(exploreRequestSchema.parse({ url: baseUrl }).authenticated, false)
     delete process.env.TEST_AUTH_PASSWORD
@@ -158,11 +244,50 @@ describe("optional authenticated exploration", () => {
     assert.equal(browser, undefined)
   })
 
-  it("logs in deterministically at depth 2, preserves one session, discovers protected views and redacts responses/prompts", async () => {
+  it("validates complete UI credential pairs without trimming passwords or exposing values", () => {
+    const input = { url: baseUrl, authenticated: true }
+    assert.deepEqual(exploreRequestSchema.parse({ ...input, username: ` ${USER} `, password: ` ${PASSWORD} ` }), {
+      ...input, username: USER, password: ` ${PASSWORD} `,
+    })
+    for (const credentials of [
+      { username: USER }, { password: PASSWORD }, { username: "", password: PASSWORD },
+      { username: "   ", password: PASSWORD }, { username: USER, password: "" },
+      { username: USER, password: 123 }, { username: null, password: PASSWORD },
+      { username: "u".repeat(1025), password: PASSWORD }, { username: USER, password: "p".repeat(4097) },
+      { username: USER, password: PASSWORD, authenticated: false },
+    ]) {
+      const result = exploreRequestSchema.safeParse({ ...input, ...credentials })
+      assert.equal(result.success, false)
+      if (!result.success) for (const secret of [USER, PASSWORD]) {
+        assert.equal(JSON.stringify(result.error.issues.map((issue) => issue.message)).includes(secret), false)
+      }
+    }
+  })
+
+  it("pins UI credentials to the submitted origin without requiring or using environment settings", () => {
+    const supplied = { username: USER, password: PASSWORD }
+    delete process.env.TEST_AUTH_USERNAME
+    delete process.env.TEST_AUTH_PASSWORD
+    assert.deepEqual(getTestCredentials(baseUrl, supplied), { origin: baseUrl, ...supplied })
+    assert.deepEqual(getTestCredentials("https://example.org:8443/login", supplied), { origin: "https://example.org:8443", ...supplied })
+    delete process.env.TEST_AUTH_ORIGIN
+    assert.deepEqual(getTestCredentials(baseUrl, supplied), { origin: baseUrl, ...supplied })
+    process.env.TEST_AUTH_ORIGIN = "invalid environment origin"
+    assert.deepEqual(getTestCredentials(baseUrl, supplied), { origin: baseUrl, ...supplied })
+  })
+
+  for (const source of ["environment", "UI"] as const) it(`logs in with ${source} credentials, preserves one session and redacts responses/prompts/logs`, async () => {
+    const credentials = source === "UI" ? { username: USER, password: PASSWORD } : undefined
+    if (source === "UI") {
+      delete process.env.TEST_AUTH_ORIGIN
+      delete process.env.TEST_AUTH_USERNAME
+      delete process.env.TEST_AUTH_PASSWORD
+    }
     const logged: unknown[][] = []
-    const logging = mock.method(console, "error", (...args: unknown[]) => logged.push(args))
+    const logging = ["error", "warn", "info", "log", "debug"] as const
+    const spies = logging.map((method) => mock.method(console, method, (...args: unknown[]) => logged.push(args)))
     try {
-      const result = await exploreApplication(baseUrl, dependencies, { authenticated: true })
+      const result = await exploreApplication(baseUrl, dependencies, { authenticated: true, credentials })
       assert.deepEqual(result.authentication, { status: "authenticated", execution: "discovery-only" })
       assert.equal(result.startUrl, `${baseUrl}/workspace`)
       assert.deepEqual(result.pages.map((page) => page.visibleText.headings[0]?.text), ["Dashboard", "Goals", "Calendar"])
@@ -177,10 +302,11 @@ describe("optional authenticated exploration", () => {
         return { pagePurpose: "Observed dashboard", tests: [{ id: "dashboard", title: "View dashboard", category: "content", reason: "Observed content", expectedOutcome: "Dashboard is visible", actions: [{ type: "navigate", url: result.startUrl }, { type: "assertText", target: "page", text: "Dashboard" }] }] }
       } })
       assert.equal(plan.execution, "discovery-only")
+      for (const secret of [USER, PASSWORD, TOKEN]) assert.equal(JSON.stringify(plan).includes(secret), false)
       for (const secret of [USER, PASSWORD, TOKEN]) assert.equal(JSON.stringify(logged).includes(secret), false)
       assertClosed()
       await assert.rejects(() => executeTestRun({ url: baseUrl, plan }), AuthenticatedExecutionUnavailableError)
-    } finally { logging.mock.restore() }
+    } finally { spies.forEach((spy) => spy.mock.restore()) }
   })
 
   it("supports native login POST and validated same-origin redirect while preserving its cookie", async () => {
@@ -191,9 +317,11 @@ describe("optional authenticated exploration", () => {
     assertClosed()
   })
 
-  it("rejects incorrect credentials with a controlled error and closes all resources", async () => {
+  for (const source of ["environment", "UI"] as const) it(`rejects incorrect ${source} credentials with a controlled error and closes all resources`, async () => {
     mode = "reject"
-    await assert.rejects(() => exploreApplication(`${baseUrl}/auth`, dependencies, { authenticated: true }), codeIs("authentication-rejected"))
+    if (source === "UI") delete process.env.TEST_AUTH_ORIGIN
+    const credentials = source === "UI" ? { username: USER, password: PASSWORD } : undefined
+    await assert.rejects(() => exploreApplication(`${baseUrl}/auth`, dependencies, { authenticated: true, credentials }), codeIs("authentication-rejected"))
     assertClosed()
   })
 
@@ -233,10 +361,13 @@ describe("optional authenticated exploration", () => {
     assertClosed()
   })
 
-  it("blocks external/private/credential-bearing redirect destinations before dispatch", async () => {
-    for (const redirect of ["native-external", "native-private", "native-credentials"] as const) {
+  for (const source of ["environment", "UI"] as const) it(`blocks external/private/credential-bearing redirects with ${source} credentials before dispatch`, async () => {
+    if (source === "UI") delete process.env.TEST_AUTH_ORIGIN
+    const credentials = source === "UI" ? { username: USER, password: PASSWORD } : undefined
+    for (const redirect of ["native-external", "native-private", "native-credentials", "client-external"] as const) {
       mode = redirect
-      await assert.rejects(() => exploreApplication(`${baseUrl}/auth`, dependencies, { authenticated: true }), codeIs("authentication-unconfirmed"))
+      await assert.rejects(() => exploreApplication(`${baseUrl}/auth`, dependencies, { authenticated: true, credentials }),
+        codeIs(redirect === "native-credentials" ? "authentication-unconfirmed" : "authentication-cross-origin-redirect"))
       assert.equal(requests.some((request) => request.path === "/workspace"), false)
       assertClosed()
       contexts = []; pages = []; requests = []

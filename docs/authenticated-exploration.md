@@ -2,9 +2,11 @@
 
 Implemented and verified on October 4, 2026. Real application results are distinguished below from synthetic browser-fixture results. No dedicated AI Life Planner account was configured during verification.
 
+This document records the original discovery-only milestone. [Guarded authenticated execution](authenticated-execution.md) now adds a temporary workflow handoff; its execution behavior supersedes the disabled-button and HTTP 409-only instructions below. The standalone plan remains blocked without a valid associated workflow.
+
 ## Architecture and execution decision
 
-`POST /api/explore` accepts an optional `authenticated` boolean, defaulting to false. `/api/discover` retains its original request, metadata and screenshot behavior. Normal exploration does not read or inject test credentials. OAuth entry controls are now skipped explicitly rather than attempted and stopped by the redirect guard.
+`POST /api/explore` accepts an optional `authenticated` boolean, defaulting to false, and optional `username`/`password` fields when authentication is enabled. Zod requires a complete nonempty pair if either is supplied; otherwise the backend-configured pair is used. UI credentials replace the entire pair, require no environment settings, and are pinned to the submitted application origin. Configured accounts still require a matching configured origin. `/api/discover` retains its original request, metadata and screenshot behavior. Normal exploration does not read or inject test credentials. OAuth entry controls are now skipped explicitly rather than attempted and stopped by the redirect guard.
 
 Authentication is deterministic backend Playwright work, completed before the planner receives data. It uses the existing metadata extraction, semantic input resolver, rendering wait, public-address checks, exploration queue, deduplication and browser cleanup. No model-generated selectors or credential actions are accepted.
 
@@ -20,13 +22,13 @@ The existing executor creates a fresh context per scenario and does not restore 
 | `TEST_AUTH_USERNAME` | Dedicated account username or email. |
 | `TEST_AUTH_PASSWORD` | Dedicated account password. |
 
-All three must be set in the backend environment. The existing `npm run dev:server` command loads the root `.env` through Node's environment-file support. Production must supply the environment or load the file explicitly when starting the compiled server. No `VITE_` variables are introduced. `.env.example` has empty placeholders, `.env` is untouched and remains ignored. Configuration checks never print values.
+All three settings are required only for the configured-account fallback, when no UI credential pair is supplied. Manual credentials do not read these settings. The existing `npm run dev:server` command loads the root `.env` through Node's environment-file support. Production must supply the environment or load the file explicitly when starting the compiled server. No `VITE_` variables are introduced. `.env.example` has empty placeholders, `.env` is untouched and remains ignored. Configuration checks never print values.
 
 Origin pinning is required so arbitrary URL requests cannot receive the configured credentials. Only the developer-supplied dedicated account is used; no account is created and authentication is not bypassed.
 
 ## Exact login flow
 
-1. Validate configuration and require the requested origin to match `TEST_AUTH_ORIGIN` before launching a browser. The normal public-URL/DNS/SSRF checks still apply.
+1. Bind manual credentials to the submitted URL's origin. For the configured-account fallback, validate configuration and require that origin to match `TEST_AUTH_ORIGIN`. The normal public-URL/DNS/SSRF checks apply before launching a browser in either mode.
 2. Follow observed safe entry controls until a local login form appears, including login tabs on registration pages. Entry search permits at most 5 states and depth 2.
 3. Require exactly one visible enabled username/email input and one visible enabled password input, with no additional editable fields. Identify the username through observed labels, placeholders or name/id metadata; resolve the submit through the button role and exact Login/Log in/Sign in accessibility name. Prefer the submit inside the form over a same-named login tab. Require the same native form owner for all three controls, or no owner for a JS-only login. Foreign form actions, ambiguous controls and registration/MFA forms are refused.
 4. Fill the backend credentials without recording values. Open a temporary login-submit window and click the observed login control. At most one same-origin POST is allowed, and only to the observed form action or a local login/auth/session endpoint with both configured values in its JSON or URL-encoded body. Credential-bearing GET requests are blocked. Other POST/PUT/PATCH/DELETE requests stay blocked.
@@ -39,7 +41,7 @@ Origin pinning is required so arbitrary URL requests cannot receive the configur
 
 Both phases share **60 seconds overall** and **20 interactions**, including login, path-replay clicks and candidate attempts. Entry search has explicit 5-state/depth-2 constants; protected output retains the existing 5-state/depth-2 constants. State fingerprints and live control rechecks prevent duplicates and unsafe replay. Partial results are permitted only after a protected root has been observed; unconfirmed authentication returns an error.
 
-Authenticated mode restricts **every network request** to the configured origin, including assets and credential POSTs. Cross-origin identity providers are unsupported. Public-address validation remains in force. Each redirect response is fetched with redirects disabled; its next origin/destination is checked before an explicit GET. Credential bodies and copied authorization headers are never forwarded. The browser receives final content, then navigates through the guard to a validated final URL when required. The session permits at most five redirect hops overall. Login POST 307/308 redirects, external/private destinations and credential-bearing redirect URLs are refused. Ordinary Level 2 continues declining all HTTP redirects.
+Authenticated mode restricts **every network request** to the submitted application origin, including assets and credential POSTs. For configured accounts, that origin must also match the configured origin. Cross-origin identity providers are unsupported. Public-address validation remains in force. Each redirect response is fetched with redirects disabled; its next origin/destination is checked before an explicit GET. Credential bodies and copied authorization headers are never forwarded. The browser receives final content, then navigates through the guard to a validated final URL when required. The session permits at most five redirect hops overall. Login POST 307/308 redirects, external/private destinations and credential-bearing redirect URLs are refused. Ordinary Level 2 continues declining all HTTP redirects.
 
 After login, risky labels, accessible names and destinations are skipped, including deletion, purchases/payments, orders, sending, submission, publishing, inviting, sharing, logout, account changes, resets, creating/adding/editing data and plan generation. Safe native links, explicit view/navigation buttons, tabs and navigation-region controls can be explored. All form-associated buttons stay excluded after login. Other HTTP mutations and WebSockets are blocked. Service workers are disabled; dialogs and popups are closed. The prototype does not intentionally create persistent user data.
 
@@ -53,11 +55,15 @@ These controls are conservative prototype boundaries, not a general proof that a
 
 | Code | Result |
 | --- | --- |
-| `credentials-not-configured` | HTTP 503, names the missing backend configuration requirements without values. |
+| `credentials-not-configured` | HTTP 503, frontend explains authenticated testing is unavailable and offers credentials or continuing without login. No configuration details are returned. |
 | `origin-not-allowed` | HTTP 400, configured origin does not match the target. |
 | `login-controls-not-found` | HTTP 502, no supported local login found within entry bounds. |
 | `authentication-rejected` | HTTP 502, server rejection or observed invalid-credential message. |
 | `authentication-unconfirmed` | HTTP 502, ambiguous success, unsupported challenge/flow, unsafe redirect or login failure. |
+| `authentication-cross-origin-redirect` | HTTP 502, sign-in navigation or a login response redirected to a different origin and was blocked before dispatch. |
+| `authenticated-exploration-failed` | HTTP 500/502, unexpected failure with no browser exception details. |
+| `username-required`, `password-required`, `credentials-required` | HTTP 400, incomplete or empty supplied credentials; frontend also validates fields before submission. Omitted credentials still select the API fallback. |
+| `invalid-url` | HTTP 400, invalid or unsafe application URL. |
 | `session-expired` | HTTP 502, login/password controls reappeared or authenticated response returned 401/403. |
 | `protected-page-redirected` | HTTP 502, protected navigation returned to the observed login URL. |
 
@@ -115,11 +121,20 @@ Windows sandbox restrictions initially blocked Node/Playwright and Vite/esbuild 
 
 ## Manual test instructions
 
-1. Supply a dedicated test account in the **backend** root `.env` (or backend process environment). Set `TEST_AUTH_ORIGIN` to `https://ai-life-planner-seven.vercel.app`, with no application path; set the username/email and password privately. Do not paste credentials into the URL field, frontend environment, generated plans or chat.
+1. For manual entry, no authentication environment settings are required. For the configured-account fallback only, supply a dedicated test account in the **backend** root `.env` (or backend process environment), setting `TEST_AUTH_ORIGIN` to the application's origin with no application path and setting its username/email and password privately. Do not paste credentials into the URL field, frontend environment, generated plans or chat.
 2. Start `npm run dev:server` and `npm run dev`. The development server reloads the backend environment on process restart; restart after changing settings.
-3. On New test, enter the app's public URL, enable Explore safe entry points, then enable Explore authenticated application and create the plan.
+3. On New test, enter the app's public URL, enable Explore additional pages automatically, then enable This application requires login. Choose Enter credentials manually and enter Username / Email and Password, or choose Use configured test account to hide manual fields and use the server's configured account, and create the plan. Switching modes clears credentials and previous errors. Missing fields show inline errors; discovery errors use fixed messages for the selected mode without server configuration details.
 4. Inspect only the actual returned protected states. If login succeeds, the first state must describe the reached workspace; planner/calendar/goals are evidence only when present in returned states. If settings/controls/login/session checks fail, the UI shows a controlled error.
 5. Review the generated navigation/assertion scenarios. The plan must show Discovery only and a disabled Run tests button. Posting that marked plan to `/api/test-runs` must return HTTP 409.
 6. Disable authenticated exploration and repeat Level 2; disable exploration entirely to verify ordinary discovery. Neither should submit credentials. OAuth, registration, account creation and authenticated data-entry forms must never be automatically submitted.
 
-For API testing, use the same URL plus `{ "authenticated": true }` in `/api/explore`; do not put credentials in JSON. Post a successful exploration response directly to `/api/test-plans`. Do not save unredacted browser storage state or screenshots.
+For API testing, use the same URL plus `{ "authenticated": true }` in `/api/explore`, optionally supplying both `username` and `password` in that request only. Omit both to use the environment fallback. Post a successful exploration response directly to `/api/test-plans`; never add credentials to planning input. Do not save request bodies, unredacted browser storage state or screenshots.
+
+## Manual credential origin fix verification — October 4, 2026
+
+Manual credential selection now uses the submitted origin and ignores authentication environment settings. The configured-account fallback retains its existing origin check. No session persistence or authenticated execution was added.
+
+- Full regression suite: **106 passed, 0 failed**. Includes manual login without auth settings, rejected credentials, secret-free responses/prompts/logs, configured fallback, URL validation before browser launch, and blocked external/private/credential-bearing redirects for both credential sources.
+- Production build, lint, and whitespace checks passed.
+- Browser-to-API integration passed missing-field validation, successful and rejected manual login with all auth settings absent, available/unavailable configured accounts, public discovery, and safe exploration. The real form, API routes, URL/origin guards, and Playwright login ran against a controlled login fixture. Only target transport and the LLM provider were stubbed; no live account or external model call was used.
+- The generated authenticated plan retained `discovery-only`, its Run tests button stayed disabled, and its execution API request returned HTTP 409. Credentials were absent from planning input, navigation state, browser storage, and captured logs; discovery browsers closed after each request.

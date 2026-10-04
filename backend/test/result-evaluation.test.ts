@@ -36,6 +36,14 @@ function requestWith(
 }
 
 describe("result evaluation", () => {
+  it("accepts guarded authenticated results without removing the plan execution marker", () => {
+    const request = requestWith([scenario("protected", { type: "assertText", target: "heading", text: "Dashboard" })], [passedResult("protected")])
+    request.plan.execution = "discovery-only"
+    const parsed = evaluationRequestSchema.parse(request)
+    assert.equal(parsed.plan.execution, "discovery-only")
+    assert.deepEqual(evaluateTestRun(parsed).summary, { total: 1, passed: 1, failed: 0 })
+  })
+
   it("evaluates more than six scenarios", () => {
     const tests = Array.from({ length: 7 }, (_, index) =>
       scenario(`scenario-${index + 1}`, { type: "assertText", target: "page", text: "Visible" }),

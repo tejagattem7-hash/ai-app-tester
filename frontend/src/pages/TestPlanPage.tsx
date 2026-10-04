@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import type { TestAction, TestPlanNavigationState } from "@/types/planning"
 import type { RunningNavigationState } from "@/types/execution"
+import { useAuthWorkflow } from "@/lib/auth-workflow"
 
 const actionLabels: Record<TestAction["type"], string> = {
   click: "Click",
@@ -40,6 +41,7 @@ export function TestPlanPage() {
   const [isStarting, setIsStarting] = useState(false)
   const location = useLocation()
   const state = location.state as TestPlanNavigationState | null
+  const workflow = useAuthWorkflow()
 
   if (!state?.plan) {
     return (
@@ -51,17 +53,20 @@ export function TestPlanPage() {
   }
 
   const { plan, url } = state
+  const authenticated = plan.execution === "discovery-only"
+  const hasWorkflow = !!workflow && JSON.stringify(workflow.plan) === JSON.stringify(plan)
+  const executionBlocked = authenticated && !hasWorkflow
   const startRun = () => {
-    if (isStarting || plan.execution === "discovery-only") return
+    if (isStarting || executionBlocked) return
     setIsStarting(true)
     const runningState: RunningNavigationState = { url, plan }
     navigate("/running", { state: runningState })
   }
   return (
     <div className="space-y-8">
-      <PageHeader eyebrow="AI test plan" title={plan.execution === "discovery-only" ? `${plan.tests.length} generated scenarios are ready to review.` : `${plan.tests.length} generated tests are ready.`} description={plan.pagePurpose} actions={<><Button variant="outline" onClick={() => navigate("/")}><ArrowLeft className="size-4" />Edit URL</Button><Button onClick={startRun} disabled={isStarting || plan.execution === "discovery-only"}><Play className="size-4" />{isStarting ? "Starting..." : "Run tests"}</Button></>} />
-      {plan.execution === "discovery-only" && <p role="status" className="rounded-lg bg-amber-50 px-5 py-4 text-sm text-amber-900">Authenticated discovery only: these scenarios describe observed protected states. Running them requires authenticated session support, which is not yet available.</p>}
-      <div className="flex flex-wrap items-center gap-3 rounded-xl border border-slate-200 bg-white px-5 py-4 text-sm"><Badge variant="info">{plan.execution === "discovery-only" ? "Discovery only" : "Ready"}</Badge><span className="break-all font-medium text-slate-900">{url}</span><span className="text-slate-400">•</span><span className="text-slate-500">{plan.tests.length} generated tests</span></div>
+      <PageHeader eyebrow="AI test plan" title={`${plan.tests.length} generated tests are ready${executionBlocked ? " to review" : ""}.`} description={plan.pagePurpose} actions={<><Button variant="outline" onClick={() => navigate("/")}><ArrowLeft className="size-4" />Edit URL</Button><Button onClick={startRun} disabled={isStarting || executionBlocked}><Play className="size-4" />{isStarting ? "Starting..." : "Run tests"}</Button></>} />
+      {authenticated && <p role="status" className="rounded-lg bg-amber-50 px-5 py-4 text-sm text-amber-900">{hasWorkflow ? "Authenticated tests are limited to observed safe navigation and assertions. This temporary workflow expires after ten minutes and can run once." : "This authenticated plan has no active workflow. Start a new test and sign in again to run it."}</p>}
+      <div className="flex flex-wrap items-center gap-3 rounded-xl border border-slate-200 bg-white px-5 py-4 text-sm"><Badge variant="info">{authenticated ? hasWorkflow ? "Authenticated" : "Discovery only" : "Ready"}</Badge><span className="break-all font-medium text-slate-900">{url}</span><span className="text-slate-400">•</span><span className="text-slate-500">{plan.tests.length} generated tests</span></div>
       <div className="space-y-4">{plan.tests.map((scenario) => (
         <Card key={scenario.id}>
           <CardContent className="flex gap-4">
