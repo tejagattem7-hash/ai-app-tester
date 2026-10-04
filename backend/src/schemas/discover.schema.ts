@@ -8,3 +8,5 @@ export const discoverRequestSchema = z.object({
     .max(2048, "url is too long")
     .url("url must be a valid absolute URL"),
 }).strict()
+
+export const exploreRequestSchema = discoverRequestSchema.extend({ authenticated: z.boolean().optional().default(false) }).strict()

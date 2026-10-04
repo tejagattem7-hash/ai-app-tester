@@ -32,7 +32,7 @@ const errorHandler: ErrorRequestHandler = (error, _request, response, _next) => 
     response.status(413).json({ error: "Request body is too large" })
     return
   }
-  console.error(error)
+  console.error("Unhandled API error")
   response.status(500).json({ error: "Internal server error" })
 }
 

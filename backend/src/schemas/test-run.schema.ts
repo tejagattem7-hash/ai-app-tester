@@ -1,5 +1,5 @@
 import { z } from "zod"
-import { MAX_TEST_SCENARIOS, testPlanSchema } from "./test-plan.schema.js"
+import { MAX_TEST_SCENARIOS, testPlanWithContextSchema } from "./test-plan.schema.js"
 
 export const executedActionResultSchema = z.object({
   type: z.enum(["click", "fill", "navigate", "select", "check", "assertText", "assertUrl"]),
@@ -25,7 +25,7 @@ export const testRunResultSchema = z.object({
 
 export const testRunRequestSchema = z.object({
   url: z.string().url().max(2048),
-  plan: testPlanSchema,
+  plan: testPlanWithContextSchema,
 }).strict()
 
 export type TestRunRequest = z.infer<typeof testRunRequestSchema>

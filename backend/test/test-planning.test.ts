@@ -167,4 +167,42 @@ describe("test planning", () => {
       })), InvalidTestPlanError)
     }
   })
+
+  it("redacts backend credentials echoed in caller-supplied planning metadata and rejects credential output", async () => {
+    const original = { username: process.env.TEST_AUTH_USERNAME, password: process.env.TEST_AUTH_PASSWORD }
+    const username = "planner-fixture-account@example.test"
+    const password = "planner-fixture-password-7351"
+    process.env.TEST_AUTH_USERNAME = username
+    process.env.TEST_AUTH_PASSWORD = password
+    try {
+      const echoed = { ...discovery, visibleText: { headings: [], paragraphs: [`${username} ${password} ${encodeURIComponent(username)}`] } }
+      await createTestPlan(echoed, { async generateTestPlan({ input }) {
+        for (const secret of [username, password, encodeURIComponent(username)]) assert.equal(input.includes(secret), false)
+        return { pagePurpose: "Safe metadata", tests: [scenario("safe")] }
+      } })
+      await assert.rejects(() => createTestPlan(discovery, providerFor({
+        pagePurpose: "Unsafe credential echo", tests: [{ ...scenario("echo"), title: password }],
+      })), (error: unknown) => {
+        assert.ok(error instanceof InvalidTestPlanError)
+        assert.equal(error.message.includes(password), false)
+        return true
+      })
+    } finally {
+      if (original.username === undefined) delete process.env.TEST_AUTH_USERNAME
+      else process.env.TEST_AUTH_USERNAME = original.username
+      if (original.password === undefined) delete process.env.TEST_AUTH_PASSWORD
+      else process.env.TEST_AUTH_PASSWORD = original.password
+    }
+  })
+
+  it("preserves observed query URLs in ordinary planning", async () => {
+    const url = "https://example.com/?view=public"
+    const plan = await createTestPlan({ ...discovery, url }, {
+      async generateTestPlan({ input }) {
+        assert.equal(JSON.parse(input.slice(input.indexOf("\n") + 1)).url, url)
+        return { pagePurpose: "Public view", tests: [{ ...scenario("query-url"), actions: [{ type: "navigate", url }, { type: "assertUrl", url }] }] }
+      },
+    })
+    assert.equal(plan.execution, undefined)
+  })
 })

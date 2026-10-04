@@ -1,6 +1,7 @@
 import { chromium, errors, type Browser, type BrowserContext, type Locator, type Page } from "playwright"
+import { AuthenticationError, MAX_AUTH_REDIRECTS } from "../config/authentication.js"
 import { MAX_VISIBLE_TEXT_CHARACTERS, type DiscoveryResult } from "../schemas/discovery-result.schema.js"
-import { hasHighRiskIntent } from "../utils/exploration-safety.js"
+import { hasAuthenticatedMutationIntent, hasHighRiskIntent, isExternalAuthenticationControl } from "../utils/exploration-safety.js"
 import { assertPublicHttpUrl, PublicUrlError } from "../utils/public-url.js"
 
 const NAVIGATION_TIMEOUT_MS = 20_000
@@ -157,6 +158,41 @@ export interface DiscoverySession {
   page: Page
   initialUrl: URL
   remainingTimeMs(): number
+  authentication?: AuthenticationNetworkGuard
+  followValidatedRedirect?(): Promise<void>
+}
+
+export interface AuthenticationNetworkGuard {
+  submissionActive: boolean
+  authenticated: boolean
+  loginRequestUsed: boolean
+  rejected: boolean
+  sessionExpired: boolean
+  redirectedToLogin: boolean
+  loginUrl?: string
+  protectedUrl?: string
+  formAction?: string
+  pendingNavigationUrl?: string
+  username: string
+  password: string
+}
+
+function allowsLoginPost(guard: AuthenticationNetworkGuard, url: URL, body: string | null): boolean {
+  if (!guard.submissionActive || guard.loginRequestUsed || !body
+    || hasHighRiskIntent(`${url.pathname} ${url.search}`)
+    || /google|oauth|mfa|captcha|passkey|register|signup/i.test(url.pathname)) return false
+  if (url.href !== guard.formAction && !/\b(auth|login|signin|session)\b/i.test(url.pathname.replace(/[^a-z]/gi, " "))) return false
+  let values: unknown[] = []
+  try { values = Object.values(JSON.parse(body) as Record<string, unknown>) } catch { values = [...new URLSearchParams(body).values()] }
+  if (!values.includes(guard.username) || !values.includes(guard.password)) return false
+  guard.loginRequestUsed = true
+  return true
+}
+
+function containsCredentials(url: URL, guard: AuthenticationNetworkGuard): boolean {
+  let data = `${url.pathname} ${url.search} ${url.hash}`
+  try { data = decodeURIComponent(data.replaceAll("+", " ")) } catch { /* Inspect encoded data too. */ }
+  return [guard.username, guard.password].some((secret) => data.includes(secret) || data.includes(encodeURIComponent(secret)))
 }
 
 // Single-page discovery and exploration share capacity, SSRF guards and cleanup.
@@ -164,12 +200,13 @@ export interface DiscoverySession {
 export async function withDiscoverySession<T>(
   rawUrl: string,
   inspect: (session: DiscoverySession) => Promise<T>,
-  options: { sameOriginOnly?: boolean; timeoutMs?: number } = {},
+  options: { sameOriginOnly?: boolean; timeoutMs?: number; authentication?: AuthenticationNetworkGuard } = {},
   dependencies: DiscoveryDependencies = defaultDependencies,
 ): Promise<T> {
   if (activeDiscoveries >= MAX_CONCURRENT_DISCOVERIES) throw new DiscoveryCapacityError()
   activeDiscoveries += 1
   const checkedHosts = new Set<string>()
+  let authRedirects = 0
   let browser: Browser | undefined
   let context: BrowserContext | undefined
   let page: Page | undefined
@@ -205,9 +242,15 @@ export async function withDiscoverySession<T>(
       try {
         const request = route.request()
         const requestUrl = new URL(request.url())
+        const auth = options.authentication
+        // In credential mode every request stays on the pinned origin. A single
+        // credential-bearing login POST is the only allowed mutating request.
+        if (auth && (requestUrl.origin !== initialUrl.origin || containsCredentials(requestUrl, auth)
+          || isExternalAuthenticationControl(requestUrl.pathname))) return await route.abort("blockedbyclient")
+        const loginPost = auth && request.method() === "POST" && allowsLoginPost(auth, requestUrl, request.postData())
         if (options.sameOriginOnly && (
-          !["GET", "HEAD"].includes(request.method())
-          || hasHighRiskIntent(`${requestUrl.pathname} ${requestUrl.search}`)
+          (!loginPost && !["GET", "HEAD"].includes(request.method()))
+          || (!loginPost && (auth?.authenticated ? hasAuthenticatedMutationIntent : hasHighRiskIntent)(`${requestUrl.pathname} ${requestUrl.search}`))
           || (request.isNavigationRequest() && requestUrl.origin !== initialUrl.origin)
         )) return await route.abort("blockedbyclient")
 
@@ -226,8 +269,37 @@ export async function withDiscoverySession<T>(
           // Playwright route.continue() does not intercept subsequent redirect
           // hops. Fetch exactly one response and decline redirects so neither
           // navigation nor assets can escape validation through a redirect.
-          const fetched = await route.fetch({ maxRedirects: 0, timeout: remainingTimeMs() })
+          let fetched = await route.fetch({ maxRedirects: 0, timeout: remainingTimeMs() })
           try {
+            // Auth mode follows only individually validated same-origin GET
+            // redirects. Never replay credential bodies to a redirect target.
+            if (auth) {
+              let finalUrl = requestUrl
+              while ([301, 302, 303, 307, 308].includes(fetched.status())) {
+                authRedirects += 1
+                if (authRedirects > MAX_AUTH_REDIRECTS || (loginPost && [307, 308].includes(fetched.status()))) throw new AuthenticationError("authentication-unconfirmed")
+                const next = new URL(fetched.headers().location ?? "", finalUrl)
+                if (next.origin !== initialUrl.origin || next.username || next.password || containsCredentials(next, auth)
+                  || isExternalAuthenticationControl(next.pathname)
+                  || (auth.authenticated ? hasAuthenticatedMutationIntent : hasHighRiskIntent)(`${next.pathname} ${next.search}`)) {
+                  throw new AuthenticationError("authentication-unconfirmed")
+                }
+                await dependencies.validateUrl(next.href)
+                if (auth.authenticated && auth.loginUrl && next.pathname === new URL(auth.loginUrl).pathname) {
+                  auth.redirectedToLogin = true
+                  throw new AuthenticationError("protected-page-redirected")
+                }
+                // Never fulfill a redirect: Chromium can skip routing on the
+                // next hop. Dispatch one validated GET ourselves, without the
+                // original credential body or copied authorization headers.
+                await fetched.dispose()
+                fetched = await context!.request.get(next.href, { maxRedirects: 0, timeout: remainingTimeMs() })
+                finalUrl = next
+              }
+              if (request.isNavigationRequest() && finalUrl.href !== requestUrl.href) auth.pendingNavigationUrl = finalUrl.href
+              if (loginPost && fetched.status() >= 400) auth.rejected = true
+              if (auth.authenticated && [401, 403].includes(fetched.status())) auth.sessionExpired = true
+            }
             if ([301, 302, 303, 307, 308].includes(fetched.status())) {
               await route.abort("blockedbyclient")
             } else {
@@ -241,9 +313,11 @@ export async function withDiscoverySession<T>(
         }
       } catch (error) {
         await route.abort("blockedbyclient").catch(() => {})
-        if (!(error instanceof PublicUrlError)) console.error("Request blocked during URL validation", error)
+        if (!(error instanceof PublicUrlError) && !options.authentication) console.error("Request blocked during URL validation")
       }
     })
+
+    if (options.authentication) await context.routeWebSocket("**/*", (socket) => socket.close())
 
     context.on("page", (openedPage) => {
       if (options.sameOriginOnly && page && openedPage !== page) void openedPage.close().catch(() => {})
@@ -261,12 +335,20 @@ export async function withDiscoverySession<T>(
     if (!response) throw new DiscoveryNavigationError("The page did not return a navigation response")
     if (response.status() >= 400) throw new DiscoveryNavigationError(`The page returned HTTP ${response.status()}`)
 
+    const followValidatedRedirect = async () => {
+      while (options.authentication?.pendingNavigationUrl) {
+        const target = options.authentication.pendingNavigationUrl
+        options.authentication.pendingNavigationUrl = undefined
+        await page!.goto(target, { waitUntil: "domcontentloaded", timeout: remainingTimeMs() })
+      }
+    }
+    await followValidatedRedirect()
     await waitForRenderedPage(page)
     await dependencies.validateUrl(page.url())
     if (options.sameOriginOnly && new URL(page.url()).origin !== initialUrl.origin) {
       throw new DiscoveryNavigationError("Navigation left the starting origin")
     }
-    return inspect({ page, initialUrl, remainingTimeMs })
+    return inspect({ page, initialUrl, remainingTimeMs, authentication: options.authentication, followValidatedRedirect })
   }
 
   try {
@@ -281,6 +363,10 @@ export async function withDiscoverySession<T>(
       }),
     ])
   } catch (error) {
+    if (options.authentication) {
+      if (error instanceof AuthenticationError || error instanceof DiscoveryCapacityError || error instanceof PublicUrlError || error instanceof DiscoveryBudgetError) throw error
+      throw new AuthenticationError("authentication-unconfirmed")
+    }
     if (error instanceof PublicUrlError || error instanceof DiscoveryNavigationError || error instanceof DiscoveryBudgetError) throw error
     if (error instanceof errors.TimeoutError) {
       throw new DiscoveryNavigationError(`Navigation exceeded the ${NAVIGATION_TIMEOUT_MS / 1000}-second timeout`)

@@ -37,8 +37,8 @@ export function discoverPage(url: string): Promise<DiscoveryResult> {
   return postJson<DiscoveryResult>("/api/discover", { url })
 }
 
-export function exploreApplication(url: string): Promise<ExplorationResult> {
-  return postJson<ExplorationResult>("/api/explore", { url })
+export function exploreApplication(url: string, authenticated = false): Promise<ExplorationResult> {
+  return postJson<ExplorationResult>("/api/explore", { url, authenticated })
 }
 
 export function createTestPlan(discovery: DiscoveryResult | ExplorationResult): Promise<TestPlan> {

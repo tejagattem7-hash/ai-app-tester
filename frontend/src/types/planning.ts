@@ -61,6 +61,7 @@ export interface ExplorationResult {
   limits: { maxPages: number; maxDepth: number; timeoutMs: number; maxInteractions: number }
   completionReason: "complete" | "page-limit" | "depth-limit" | "time-limit" | "interaction-limit"
   warnings: string[]
+  authentication?: { status: "authenticated"; execution: "discovery-only" }
 }
 
 export type TestAction =
@@ -84,6 +85,7 @@ export interface GeneratedTestScenario {
 }
 
 export interface TestPlan {
+  execution?: "discovery-only"
   pagePurpose: string
   tests: GeneratedTestScenario[]
 }

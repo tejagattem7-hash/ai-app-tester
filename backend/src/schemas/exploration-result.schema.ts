@@ -30,6 +30,10 @@ export const explorationResultSchema = z.object({
   }).strict(),
   completionReason: z.enum(["complete", "page-limit", "depth-limit", "time-limit", "interaction-limit"]),
   warnings: z.array(z.string().max(500)).max(MAX_EXPLORATION_INTERACTIONS),
+  authentication: z.object({
+    status: z.literal("authenticated"),
+    execution: z.literal("discovery-only"),
+  }).strict().optional(),
 }).strict().superRefine((result, context) => {
   const origin = new URL(result.startUrl).origin
   const states = new Map(result.pages.map((page) => [page.id, page]))

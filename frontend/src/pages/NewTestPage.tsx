@@ -14,6 +14,7 @@ export function NewTestPage() {
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [explore, setExplore] = useState(false)
+  const [authenticated, setAuthenticated] = useState(false)
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
@@ -24,7 +25,7 @@ export function NewTestPage() {
     setError(null)
 
     try {
-      const discovery = await (explore ? exploreApplication(submittedUrl) : discoverPage(submittedUrl))
+      const discovery = await (explore ? exploreApplication(submittedUrl, authenticated) : discoverPage(submittedUrl))
       const plan = await createTestPlan(discovery)
       const state: TestPlanNavigationState = { url: submittedUrl, plan }
       navigate("/plan", { state })
@@ -55,8 +56,15 @@ export function NewTestPage() {
               <input type="checkbox" checked={explore} onChange={(event) => setExplore(event.target.checked)} disabled={isLoading} />
               Explore safe entry points and related pages (up to 5 states; may take a minute)
             </label>
+            {explore && <>
+              <label className="mt-3 flex items-center gap-2 text-sm text-slate-600">
+                <input type="checkbox" checked={authenticated} onChange={(event) => setAuthenticated(event.target.checked)} disabled={isLoading} />
+                Explore authenticated application using a backend-configured test account
+              </label>
+              {authenticated && <p className="mt-2 text-xs text-slate-500">Uses a dedicated test account configured on the server for this application. Authenticated plans can be reviewed; running them is not yet supported.</p>}
+            </>}
             {error && <p role="alert" className="mt-3 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p>}
-            <p className="mt-3 flex items-center gap-2 text-xs text-slate-500"><ShieldCheck className="size-3.5" />Only publicly accessible pages are supported in this MVP.</p>
+            <p className="mt-3 flex items-center gap-2 text-xs text-slate-500"><ShieldCheck className="size-3.5" />Public URLs only. Authenticated exploration requires a dedicated backend test account.</p>
           </form>
         </CardContent>
         <div className="grid border-t border-slate-200 bg-slate-50 md:grid-cols-3">{["Discover key interactions", "Generate meaningful tests", "Get actionable evidence"].map((item, index) => <div key={item} className="flex items-center gap-3 border-b border-slate-200 px-6 py-4 last:border-b-0 md:border-b-0 md:border-r md:last:border-r-0"><span className="flex size-6 items-center justify-center rounded-full bg-white text-xs font-bold text-indigo-600 shadow-sm">{index + 1}</span><span className="text-sm text-slate-600">{item}</span></div>)}</div>

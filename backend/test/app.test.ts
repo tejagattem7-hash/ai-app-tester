@@ -60,4 +60,42 @@ describe("API basics", () => {
       assert.equal(response.status, 400)
     }
   })
+
+  it("returns a controlled missing-test-credentials error without accepting frontend credentials", async () => {
+    const original = process.env.TEST_AUTH_PASSWORD
+    delete process.env.TEST_AUTH_PASSWORD
+    try {
+      const response = await fetch(`${baseUrl}/api/explore`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ url: "https://example.com", authenticated: true }),
+      })
+      assert.equal(response.status, 503)
+      assert.equal((await response.json() as { code: string }).code, "credentials-not-configured")
+      for (const body of [
+        { url: "https://example.com", authenticated: "true" },
+        { url: "https://example.com", authenticated: true, password: "frontend-password" },
+      ]) {
+        const invalid = await fetch(`${baseUrl}/api/explore`, {
+          method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+        })
+        assert.equal(invalid.status, 400)
+        assert.equal((await invalid.text()).includes("frontend-password"), false)
+      }
+    } finally {
+      if (original === undefined) delete process.env.TEST_AUTH_PASSWORD
+      else process.env.TEST_AUTH_PASSWORD = original
+    }
+  })
+
+  it("rejects authenticated discovery-only plans before launching an execution browser", async () => {
+    const response = await fetch(`${baseUrl}/api/test-runs`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ url: "https://example.com", plan: {
+        execution: "discovery-only", pagePurpose: "Observed protected workspace",
+        tests: [{ id: "dashboard", title: "Dashboard", category: "content", reason: "Observed heading", expectedOutcome: "Dashboard visible", actions: [{ type: "assertText", target: "page", text: "Dashboard" }] }],
+      } }),
+    })
+    assert.equal(response.status, 409)
+    assert.match(await response.text(), /discovery only/)
+  })
 })

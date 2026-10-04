@@ -52,6 +52,18 @@ States are deduplicated with a small hash of URL (excluding fragment), title, he
 
 See [live exploration results and generated plan](docs/exploration-quality.md) for verification on AI Life Planner and SauceDemo.
 
+## Optional authenticated exploration (Level 3)
+
+`POST /api/explore` additionally accepts `{ "url": "https://your-test-app.example/", "authenticated": true }`. Configure `TEST_AUTH_ORIGIN`, `TEST_AUTH_USERNAME` and `TEST_AUTH_PASSWORD` in the backend environment using a **dedicated test account**. The origin must match the submitted URL exactly, including scheme and port, and contain no path, query or fragment. Never use frontend/Vite variables or personal credentials. `.env` remains gitignored; `.env.example` contains empty placeholders.
+
+Enable **Explore safe entry points**, then **Explore authenticated application** on New test. Missing backend settings produce an explicit configuration error. Neither ordinary discovery nor ordinary exploration authenticates automatically.
+
+The deterministic backend finds an observed local email/username and password login, fills credentials, submits that login only, and confirms form disappearance plus changed semantic content. It then explores observed protected views in the same browser context. Both phases share the 60-second/20-interaction limits; entry search is bounded to 5 states/depth 2, and protected exploration is separately bounded to 5 states/depth 2. Authenticated requests remain on the configured origin, validated redirects are handled one hop at a time, and other mutating requests, WebSockets, destructive controls and form submissions are blocked. OAuth, MFA, CAPTCHA, passkeys and account creation are unsupported.
+
+Authenticated responses contain protected metadata only, no screenshots, no field values, and no storage state. Credentials and known session values are redacted; paragraphs and URL query/fragment data are excluded. Authenticated plans allow only observed navigation and assertions and carry `execution: "discovery-only"`. **They cannot currently execute:** Run tests is disabled and `/api/test-runs` returns HTTP 409 for them. Sessions are closed after discovery and are not saved or handed to the frontend.
+
+See [architecture, security boundaries, exact observations and manual instructions](docs/authenticated-exploration.md) and [live regression evidence](docs/authenticated-verification.json).
+
 ## AI test planning
 
 Set `OPENAI_API_KEY` and `OPENAI_MODEL` in the server process environment (see `.env.example` for the required names). `POST /api/test-plans` accepts the complete JSON response from `/api/discover` or `/api/explore` and returns the identified page purpose plus a complexity-based set of 1–15 validated test scenarios. It aims for at least three when that many meaningful, non-duplicate tests exist. It uses recorded transitions to plan workflows across observed states and never assumes that advertised or authenticated capabilities were reached. It creates plans only; it does not execute actions.

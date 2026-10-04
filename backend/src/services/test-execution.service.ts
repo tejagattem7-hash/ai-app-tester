@@ -54,7 +54,7 @@ async function inputByMetadata(page: Page, names: string[]): Promise<Locator | u
   }
 }
 
-async function resolveInput(page: Page, target: string): Promise<Locator> {
+export async function resolveInput(page: Page, target: string): Promise<Locator> {
   const names = targetNames(target)
   const semantic = names.flatMap((name) => [page.getByLabel(name, { exact: false }), page.getByPlaceholder(name, { exact: false })])
   const match = await firstVisible(semantic) ?? await inputByMetadata(page, names)
@@ -168,6 +168,7 @@ async function executeAction(session: ExecutionSession, action: TestAction, vali
 }
 
 export async function executeTestRun(request: TestRunRequest, suppliedDependencies?: ExecutionDependencies): Promise<TestRunResult> {
+  if (request.plan.execution === "discovery-only") throw new AuthenticatedExecutionUnavailableError()
   const ownsDependencies = !suppliedDependencies
   const dependencies = suppliedDependencies ?? await createPlaywrightDependencies()
   const results: ScenarioExecutionResult[] = []
@@ -220,3 +221,10 @@ export async function executeTestRun(request: TestRunRequest, suppliedDependenci
 }
 
 export { PublicUrlError }
+
+export class AuthenticatedExecutionUnavailableError extends Error {
+  constructor() {
+    super("Authenticated plans are discovery only. The test runner does not yet restore authenticated sessions.")
+    this.name = "AuthenticatedExecutionUnavailableError"
+  }
+}

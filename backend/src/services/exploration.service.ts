@@ -1,10 +1,13 @@
 import { createHash } from "node:crypto"
 import type { Page } from "playwright"
+import { AuthenticationError, getTestCredentials, MAX_AUTH_ENTRY_DEPTH, MAX_AUTH_ENTRY_STATES } from "../config/authentication.js"
 import { EXPLORATION_ACTION_TIMEOUT_MS, EXPLORATION_TIMEOUT_MS, MAX_EXPLORATION_DEPTH, MAX_EXPLORATION_INTERACTIONS, MAX_EXPLORATION_PAGES } from "../config/exploration.js"
 import { explorationResultSchema, type ExploredPage, type ExplorationResult, type NavigationControl } from "../schemas/exploration-result.schema.js"
-import { isSafeNavigationControl } from "../utils/exploration-safety.js"
+import { isExternalAuthenticationControl, isSafeAuthenticatedNavigationControl, isSafeNavigationControl } from "../utils/exploration-safety.js"
+import { SecretRedactor } from "../utils/secret-redaction.js"
 import { assertPublicHttpUrl } from "../utils/public-url.js"
-import { DiscoveryBudgetError, DiscoveryNavigationError, extractPageDetails, waitForRenderedPage, withDiscoverySession, type DiscoveryDependencies, type DiscoverySession } from "./discovery.service.js"
+import { authenticate, findLoginControls, rememberSessionSecrets } from "./authentication.service.js"
+import { DiscoveryBudgetError, DiscoveryNavigationError, extractPageDetails, waitForRenderedPage, withDiscoverySession, type AuthenticationNetworkGuard, type DiscoveryDependencies, type DiscoverySession } from "./discovery.service.js"
 
 const CONTROL_SELECTOR = "body button, body input[type='button'], body input[type='submit'], body input[type='reset'], body a[href]"
 const MAX_CANDIDATES_PER_STATE = 200
@@ -38,7 +41,7 @@ export function stateFingerprint(page: Omit<ExploredPage, "id" | "depth">): stri
   })).digest("hex")
 }
 
-async function safeCandidates(page: Page, origin: string): Promise<Candidate[]> {
+async function safeCandidates(page: Page, origin: string, authenticated = false): Promise<Candidate[]> {
   const controls = await page.evaluate(({ selector, limit }) => {
     const result = []
     const elements = document.querySelectorAll<HTMLButtonElement | HTMLInputElement | HTMLAnchorElement>(selector)
@@ -59,6 +62,8 @@ async function safeCandidates(page: Page, origin: string): Promise<Candidate[]> 
         download: link && element.hasAttribute("download"),
         target: element.getAttribute("target") ?? "",
         type: element.getAttribute("type") ?? "",
+        role: element.getAttribute("role") ?? "",
+        navigationRegion: !!element.closest("nav, [role='navigation']"),
       })
     }
     return result
@@ -68,17 +73,24 @@ async function safeCandidates(page: Page, origin: string): Promise<Candidate[]> 
   // cannot consume the entire budget before its application entry is explored.
   const priority = (control: NavigationControl) => control.kind === "link" ? 2
     : /^get\s+started\b/i.test(control.text) ? 0 : 1
-  return controls.filter((control) => isSafeNavigationControl(control, origin))
+  return controls.filter((control) => !isExternalAuthenticationControl(`${control.text} ${control.ariaLabel} ${control.href ?? ""}`)
+    && (authenticated ? isSafeAuthenticatedNavigationControl(control, origin) : isSafeNavigationControl(control, origin)))
     .map(({ index, kind, text, href }) => ({ index, control: { kind, text, ...(href ? { href } : {}) } }))
     .sort((a, b) => priority(a.control) - priority(b.control))
 }
 
 async function validateState(session: DiscoverySession, dependencies?: DiscoveryDependencies): Promise<void> {
+  if (session.authentication?.authenticated) {
+    if (session.authentication.redirectedToLogin || (session.authentication.loginUrl && session.authentication.protectedUrl !== session.authentication.loginUrl
+      && session.page.url() === session.authentication.loginUrl)) throw new AuthenticationError("protected-page-redirected")
+    if (session.authentication.sessionExpired) throw new AuthenticationError("session-expired")
+  }
   const url = await (dependencies?.validateUrl ?? assertPublicHttpUrl)(session.page.url())
   if (url.origin !== session.initialUrl.origin) throw new DiscoveryNavigationError("Navigation left the starting origin")
 }
 
 async function settlePage(session: DiscoverySession): Promise<void> {
+  await session.followValidatedRedirect?.()
   await session.page.waitForLoadState("domcontentloaded", { timeout: session.remainingTimeMs() })
   try {
     await waitForRenderedPage(session.page)
@@ -97,10 +109,10 @@ async function captureState(session: DiscoverySession, dependencies?: DiscoveryD
   return { title, url: session.page.url(), ...details, visibleText: details.visibleText ?? { headings: [], paragraphs: [] } }
 }
 
-async function followCandidate(session: DiscoverySession, candidate: Candidate, beforeClick: () => void, dependencies?: DiscoveryDependencies): Promise<void> {
+async function followCandidate(session: DiscoverySession, candidate: Candidate, beforeClick: () => void, dependencies?: DiscoveryDependencies, authenticated = false): Promise<void> {
   // Recheck the live DOM before every click, including path replay. Never click
   // an element just because a previous document had a safe control at its index.
-  const liveCandidates = await safeCandidates(session.page, session.initialUrl.origin)
+  const liveCandidates = await safeCandidates(session.page, session.initialUrl.origin, authenticated)
   if (!liveCandidates.some((live) => live.index === candidate.index && JSON.stringify(live.control) === JSON.stringify(candidate.control))) {
     throw new DiscoveryNavigationError("The entry control changed or is no longer safe to explore")
   }
@@ -113,21 +125,27 @@ async function followCandidate(session: DiscoverySession, candidate: Candidate, 
   await validateState(session, dependencies)
 }
 
-async function restoreState(session: DiscoverySession, state: QueuedState, beforeClick: () => void, dependencies?: DiscoveryDependencies): Promise<void> {
-  const response = await session.page.goto(session.initialUrl.href, { waitUntil: "domcontentloaded", timeout: session.remainingTimeMs() })
+async function restoreState(session: DiscoverySession, state: QueuedState, beforeClick: () => void, dependencies?: DiscoveryDependencies,
+  entryUrl = session.initialUrl.href, authenticated = false, capture = () => captureState(session, dependencies)): Promise<void> {
+  const response = await session.page.goto(entryUrl, { waitUntil: "domcontentloaded", timeout: session.remainingTimeMs() })
   if (!response || response.status() >= 400) throw new DiscoveryNavigationError("Unable to restore the initial application state")
   await settlePage(session)
   await validateState(session, dependencies)
-  for (const candidate of state.path) await followCandidate(session, candidate, beforeClick, dependencies)
+  // Check auth before replaying any control on a login redirect.
+  await capture()
+  for (const candidate of state.path) {
+    await followCandidate(session, candidate, beforeClick, dependencies, authenticated)
+    await capture()
+  }
   // Only record edges from the previously observed state. A non-replayable SPA
   // path must not associate a new control with the wrong page's metadata.
-  if (stateFingerprint(await captureState(session, dependencies)) !== state.fingerprint) {
+  if (stateFingerprint(await capture()) !== state.fingerprint) {
     throw new DiscoveryNavigationError("The observed state could not be reproduced safely")
   }
 }
 
-export async function exploreApplication(rawUrl: string, dependencies?: DiscoveryDependencies): Promise<ExplorationResult> {
-  const result: ExplorationResult = {
+function emptyExploration(rawUrl: string): ExplorationResult {
+  return {
     startUrl: rawUrl,
     pages: [],
     transitions: [],
@@ -135,87 +153,151 @@ export async function exploreApplication(rawUrl: string, dependencies?: Discover
     completionReason: "complete",
     warnings: [],
   }
+}
+
+export async function exploreApplication(rawUrl: string, dependencies?: DiscoveryDependencies, options: { authenticated?: boolean } = {}): Promise<ExplorationResult> {
+  const credentials = options.authenticated ? getTestCredentials(rawUrl) : undefined
+  const redactor = credentials ? new SecretRedactor([credentials.username, credentials.password]) : undefined
+  const guard: AuthenticationNetworkGuard | undefined = credentials ? {
+    username: credentials.username, password: credentials.password, submissionActive: false,
+    authenticated: false, loginRequestUsed: false, rejected: false, sessionExpired: false, redirectedToLogin: false,
+  } : undefined
+  let result = emptyExploration(rawUrl)
   const warn = (error: unknown) => {
     if (error instanceof DiscoveryBudgetError || error instanceof ExplorationInteractionLimitError) throw error
+    if (error instanceof AuthenticationError) throw error
     if (result.warnings.length < MAX_EXPLORATION_INTERACTIONS) {
-      result.warnings.push((error instanceof Error ? error.message : "Unable to explore control").slice(0, 500))
+      result.warnings.push((credentials ? "A navigation control could not be explored safely."
+        : error instanceof Error ? error.message : "Unable to explore control").slice(0, 500))
     }
   }
   try {
     await withDiscoverySession(rawUrl, async (session) => {
-      result.startUrl = session.initialUrl.href
-      const initial = await captureState(session, dependencies)
-      const root: QueuedState = { metadata: { ...initial, id: "state-1", depth: 0 }, path: [], fingerprint: stateFingerprint(initial) }
-      const queue = [root]
-      const visited = new Map([[root.fingerprint, root.metadata.id]])
-      result.pages.push(root.metadata)
-      let currentStateId: string | undefined = root.metadata.id
-      let attempts = 0
       let interactions = 0
+      let attempts = 0
       const beforeClick = () => {
         if (interactions >= MAX_EXPLORATION_INTERACTIONS) throw new ExplorationInteractionLimitError()
         interactions += 1
       }
-      let depthLimited = false
+      const capture = async () => {
+        const metadata = await captureState(session, dependencies)
+        if (guard?.authenticated) {
+          if (guard.redirectedToLogin) throw new AuthenticationError("protected-page-redirected")
+          if (guard.sessionExpired || metadata.inputs.some((input) => input.type === "password") || await findLoginControls(session.page)) {
+            throw new AuthenticationError("session-expired")
+          }
+          await rememberSessionSecrets(session.page, redactor!)
+          // Authenticated free-form paragraphs can contain personal account data.
+          // Controls and headings suffice for observed navigation planning.
+          metadata.visibleText.paragraphs = []
+          const safe = redactor!.sanitize(metadata)
+          safe.visibleText.headings = safe.visibleText.headings.filter((heading) => !heading.text.includes("[redacted]"))
+          safe.buttons = safe.buttons.filter((button) => !button.text.includes("[redacted]"))
+          safe.links = safe.links.filter((link) => !link.text.includes("[redacted]") && !link.href.includes("[redacted]"))
+          return safe
+        }
+        return metadata
+      }
+      const walk = async (entryUrl: string, entrySearch = false): Promise<boolean> => {
+        result.startUrl = guard?.authenticated ? redactor!.sanitize(entryUrl) : entryUrl
+        const initial = await capture()
+        const root: QueuedState = { metadata: { ...initial, id: "state-1", depth: 0 }, path: [], fingerprint: stateFingerprint(initial) }
+        const queue = [root]
+        const visited = new Map([[root.fingerprint, root.metadata.id]])
+        result.pages.push(root.metadata)
+        let currentStateId: string | undefined = root.metadata.id
+        let depthLimited = false
 
-      for (const state of queue) {
-        if (currentStateId !== state.metadata.id) {
-          try {
-            await restoreState(session, state, beforeClick, dependencies)
-            currentStateId = state.metadata.id
-          } catch (error) {
-            warn(error)
-            currentStateId = undefined
+        for (const state of queue) {
+          if (currentStateId !== state.metadata.id) {
+            try {
+              await restoreState(session, state, beforeClick, dependencies, entryUrl, guard?.authenticated, capture)
+              currentStateId = state.metadata.id
+            } catch (error) {
+              warn(error)
+              currentStateId = undefined
+              continue
+            }
+          }
+          if (entrySearch) {
+            const controls = await findLoginControls(session.page)
+            if (controls) {
+              await authenticate(session, controls, await capture(), credentials!, guard!, () => captureState(session, dependencies), beforeClick)
+              return true
+            }
+          }
+          const candidates = await safeCandidates(session.page, session.initialUrl.origin, guard?.authenticated)
+          if (state.metadata.depth >= (entrySearch ? MAX_AUTH_ENTRY_DEPTH : MAX_EXPLORATION_DEPTH)) {
+            depthLimited ||= candidates.length > 0
             continue
           }
-        }
-        const candidates = await safeCandidates(session.page, session.initialUrl.origin)
-        if (state.metadata.depth >= MAX_EXPLORATION_DEPTH) {
-          depthLimited ||= candidates.length > 0
-          continue
-        }
 
-        for (const candidate of candidates) {
-          if (attempts >= MAX_EXPLORATION_INTERACTIONS) {
-            result.completionReason = "interaction-limit"
-            return
-          }
-          attempts += 1
-          try {
-            if (currentStateId !== state.metadata.id) await restoreState(session, state, beforeClick, dependencies)
-            currentStateId = undefined
-            await followCandidate(session, candidate, beforeClick, dependencies)
-            const metadata = await captureState(session, dependencies)
-            const fingerprint = stateFingerprint(metadata)
-            let targetId = visited.get(fingerprint)
-            if (!targetId) {
-              targetId = `state-${result.pages.length + 1}`
-              const child: QueuedState = {
-                metadata: { ...metadata, id: targetId, depth: state.metadata.depth + 1 },
-                fingerprint,
-                path: [...state.path, candidate],
+          for (const candidate of candidates) {
+            if (attempts >= MAX_EXPLORATION_INTERACTIONS) {
+              result.completionReason = "interaction-limit"
+              return false
+            }
+            attempts += 1
+            try {
+              if (currentStateId !== state.metadata.id) await restoreState(session, state, beforeClick, dependencies, entryUrl, guard?.authenticated, capture)
+              currentStateId = undefined
+              await followCandidate(session, candidate, beforeClick, dependencies, guard?.authenticated)
+              const metadata = await capture()
+              const fingerprint = stateFingerprint(metadata)
+              let targetId = visited.get(fingerprint)
+              if (!targetId) {
+                targetId = `state-${result.pages.length + 1}`
+                const child: QueuedState = {
+                  metadata: { ...metadata, id: targetId, depth: state.metadata.depth + 1 },
+                  fingerprint,
+                  path: [...state.path, candidate],
+                }
+                visited.set(fingerprint, targetId)
+                queue.push(child)
+                result.pages.push(child.metadata)
               }
-              visited.set(fingerprint, targetId)
-              queue.push(child)
-              result.pages.push(child.metadata)
+              currentStateId = targetId
+              result.transitions.push({ fromStateId: state.metadata.id, toStateId: targetId, control: redactor && guard?.authenticated ? redactor.sanitize(candidate.control) : candidate.control })
+              // Login may be reached at the final entry state; inspect it before
+              // applying the entry page/depth limit.
+              if (entrySearch) {
+                const controls = await findLoginControls(session.page)
+                if (controls) {
+                  await authenticate(session, controls, metadata, credentials!, guard!, () => captureState(session, dependencies), beforeClick)
+                  return true
+                }
+              }
+              if (result.pages.length >= (entrySearch ? MAX_AUTH_ENTRY_STATES : MAX_EXPLORATION_PAGES)) {
+                result.completionReason = "page-limit"
+                return false
+              }
+            } catch (error) {
+              currentStateId = undefined
+              warn(error)
             }
-            currentStateId = targetId
-            result.transitions.push({ fromStateId: state.metadata.id, toStateId: targetId, control: candidate.control })
-            if (result.pages.length >= MAX_EXPLORATION_PAGES) {
-              result.completionReason = "page-limit"
-              return
-            }
-          } catch (error) {
-            currentStateId = undefined
-            warn(error)
           }
         }
+        if (depthLimited) result.completionReason = "depth-limit"
+        return false
       }
-      if (depthLimited) result.completionReason = "depth-limit"
-    }, { sameOriginOnly: true, timeoutMs: EXPLORATION_TIMEOUT_MS }, dependencies)
+      if (credentials) {
+        if (!await walk(session.initialUrl.href, true)) throw new AuthenticationError("login-controls-not-found")
+        // Drop all entry metadata and paths; protected discovery starts at the
+        // verified authenticated state, using the very same context and page.
+        const protectedUrl = session.page.url()
+        if (new URL(protectedUrl).search || new URL(protectedUrl).hash) throw new AuthenticationError("authentication-unconfirmed")
+        result = emptyExploration(protectedUrl)
+        result.authentication = { status: "authenticated", execution: "discovery-only" }
+        await walk(protectedUrl)
+      } else await walk(session.initialUrl.href)
+    }, { sameOriginOnly: true, timeoutMs: EXPLORATION_TIMEOUT_MS, authentication: guard }, dependencies)
   } catch (error) {
     // Return useful partial observations at the deadline, but never invent an
     // initial state if the application did not become discoverable in time.
+    if (credentials && (!guard?.authenticated || !result.authentication)) {
+      if (error instanceof AuthenticationError) throw error
+      throw new AuthenticationError("authentication-unconfirmed")
+    }
     if (error instanceof ExplorationInteractionLimitError && result.pages.length) {
       result.completionReason = "interaction-limit"
     } else if (error instanceof DiscoveryBudgetError && result.pages.length) {

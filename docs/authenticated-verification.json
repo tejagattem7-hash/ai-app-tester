@@ -1,0 +1,122 @@
+{
+  "verifiedOn": "2026-10-04",
+  "verification": {
+    "typescript": "passed",
+    "lint": "passed",
+    "backendTests": { "passed": 80, "failed": 0, "suites": 9 },
+    "productionBuild": "passed",
+    "frontendBrowserSmoke": "passed",
+    "authenticatedFixtureStates": ["Dashboard", "Goals", "Calendar"],
+    "realAuthenticatedWorkspaceVerified": false
+  },
+  "checks": [
+    {
+      "url": "https://www.saucedemo.com/",
+      "endpoint": "discover",
+      "status": 200,
+      "title": "Swag Labs",
+      "finalUrl": "https://www.saucedemo.com/",
+      "inputCount": 3,
+      "buttonCount": 1,
+      "formCount": 1,
+      "screenshotPresent": true
+    },
+    {
+      "url": "https://www.saucedemo.com/",
+      "endpoint": "explore",
+      "status": 200,
+      "states": [
+        {
+          "id": "state-1",
+          "depth": 0,
+          "url": "https://www.saucedemo.com/"
+        }
+      ],
+      "transitions": [],
+      "completionReason": "complete",
+      "warnings": []
+    },
+    {
+      "url": "https://ai-life-planner-seven.vercel.app/",
+      "endpoint": "discover",
+      "status": 200,
+      "title": "AI Life Planner - Your life, planned intelligently",
+      "finalUrl": "https://ai-life-planner-seven.vercel.app/",
+      "inputCount": 0,
+      "buttonCount": 3,
+      "formCount": 0,
+      "screenshotPresent": true
+    },
+    {
+      "url": "https://ai-life-planner-seven.vercel.app/",
+      "endpoint": "explore",
+      "status": 200,
+      "states": [
+        {
+          "id": "state-1",
+          "depth": 0,
+          "url": "https://ai-life-planner-seven.vercel.app/",
+          "headings": [
+            "Make time for the life you actually want.",
+            "Planning that sees the bigger picture.",
+            "AI Planning",
+            "Smart Calendar",
+            "Goals",
+            "Health & Fitness"
+          ]
+        },
+        {
+          "id": "state-2",
+          "depth": 1,
+          "url": "https://ai-life-planner-seven.vercel.app/auth",
+          "headings": [
+            "Create your account"
+          ]
+        },
+        {
+          "id": "state-3",
+          "depth": 2,
+          "url": "https://ai-life-planner-seven.vercel.app/auth",
+          "headings": [
+            "Welcome back"
+          ]
+        }
+      ],
+      "transitions": [
+        {
+          "fromStateId": "state-1",
+          "toStateId": "state-2",
+          "control": {
+            "kind": "button",
+            "text": "Get Started →"
+          }
+        },
+        {
+          "fromStateId": "state-1",
+          "toStateId": "state-2",
+          "control": {
+            "kind": "button",
+            "text": "Sign in"
+          }
+        },
+        {
+          "fromStateId": "state-2",
+          "toStateId": "state-3",
+          "control": {
+            "kind": "button",
+            "text": "Log in"
+          }
+        }
+      ],
+      "completionReason": "depth-limit",
+      "warnings": []
+    },
+    {
+      "endpoint": "explore",
+      "authenticated": true,
+      "status": 503,
+      "code": "credentials-not-configured",
+      "error": "Authenticated exploration failed"
+    }
+  ]
+}

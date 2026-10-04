@@ -67,5 +67,7 @@ export const testPlanSchema = z.object({
   tests: z.array(testScenarioSchema).min(1).max(MAX_TEST_SCENARIOS),
 }).strict()
 
-export type TestPlan = z.infer<typeof testPlanSchema>
+// Execution context is added by deterministic backend code, never by the LLM.
+export const testPlanWithContextSchema = testPlanSchema.extend({ execution: z.literal("discovery-only").optional() }).strict()
+export type TestPlan = z.infer<typeof testPlanWithContextSchema>
 export type TestAction = z.infer<typeof testActionSchema>

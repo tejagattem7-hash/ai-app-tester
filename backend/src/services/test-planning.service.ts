@@ -1,6 +1,7 @@
 import type { TestPlanningLlmProvider } from "../providers/llm/test-planning.provider.js"
 import type { ExplorationResult, PlanningDiscovery } from "../schemas/exploration-result.schema.js"
 import { MAX_TEST_SCENARIOS, testPlanSchema, type TestPlan } from "../schemas/test-plan.schema.js"
+import { configuredSecretRedactor } from "../utils/secret-redaction.js"
 
 export class InvalidTestPlanError extends Error {
   constructor(message: string, options?: ErrorOptions) {
@@ -29,6 +30,7 @@ Rules:
 - Avoid scenarios that test the same behavior with only superficial wording or data changes.
 - Avoid destructive, irreversible, financial, account-creation, or data-deletion actions.
 - End each scenario with at least one assertText or assertUrl action.
+- When authentication.status is authenticated, startUrl is an already authenticated root. Authentication happened separately; never generate login, credentials or session setup actions. Use only recorded read/view/navigation clicks and assertions. Do not fill, select, check or submit authenticated forms. These plans are discovery only and cannot yet run in the executor.
 - Give every scenario a unique lowercase kebab-case id.`
 
 function createModelInput(discovery: PlanningDiscovery): string {
@@ -69,6 +71,7 @@ function validateObservedWorkflow(plan: TestPlan, discovery: ExplorationResult):
           break
         }
         case "fill":
+          if (discovery.authentication) throw new InvalidTestPlanError("Authenticated plans support only observed navigation and assertions")
           if (!states.every((page) => page.inputs.some((input) => !input.disabled
             && [input.label, input.name, input.id, input.placeholder].includes(action.target)))) {
             throw new InvalidTestPlanError(`Test ${test.id} fills an input absent from its observed state`)
@@ -98,10 +101,18 @@ export async function createTestPlan(
   discovery: PlanningDiscovery,
   provider: TestPlanningLlmProvider,
 ): Promise<TestPlan> {
+  // A second secret boundary protects even client-supplied planning metadata.
+  const redactor = configuredSecretRedactor()
+  const authenticated = "pages" in discovery && !!discovery.authentication
+  discovery = redactor.sanitize(discovery, authenticated)
   const rawPlan = await provider.generateTestPlan({
     system: SYSTEM_PROMPT,
     input: createModelInput(discovery),
   })
+
+  if (JSON.stringify(rawPlan) !== JSON.stringify(redactor.sanitize(rawPlan, authenticated))) {
+    throw new InvalidTestPlanError("The model returned sensitive or unsupported URL data")
+  }
 
   const result = testPlanSchema.safeParse(rawPlan)
   if (!result.success) {
@@ -124,5 +135,5 @@ export async function createTestPlan(
   }
 
   if ("pages" in discovery) validateObservedWorkflow(result.data, discovery)
-  return result.data
+  return "pages" in discovery && discovery.authentication ? { ...result.data, execution: "discovery-only" } : result.data
 }

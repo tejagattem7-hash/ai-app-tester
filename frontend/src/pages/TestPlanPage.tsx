@@ -52,15 +52,16 @@ export function TestPlanPage() {
 
   const { plan, url } = state
   const startRun = () => {
-    if (isStarting) return
+    if (isStarting || plan.execution === "discovery-only") return
     setIsStarting(true)
     const runningState: RunningNavigationState = { url, plan }
     navigate("/running", { state: runningState })
   }
   return (
     <div className="space-y-8">
-      <PageHeader eyebrow="AI test plan" title={`${plan.tests.length} generated tests are ready.`} description={plan.pagePurpose} actions={<><Button variant="outline" onClick={() => navigate("/")}><ArrowLeft className="size-4" />Edit URL</Button><Button onClick={startRun} disabled={isStarting}><Play className="size-4" />{isStarting ? "Starting..." : "Run tests"}</Button></>} />
-      <div className="flex flex-wrap items-center gap-3 rounded-xl border border-slate-200 bg-white px-5 py-4 text-sm"><Badge variant="info">Ready</Badge><span className="break-all font-medium text-slate-900">{url}</span><span className="text-slate-400">•</span><span className="text-slate-500">{plan.tests.length} generated tests</span></div>
+      <PageHeader eyebrow="AI test plan" title={plan.execution === "discovery-only" ? `${plan.tests.length} generated scenarios are ready to review.` : `${plan.tests.length} generated tests are ready.`} description={plan.pagePurpose} actions={<><Button variant="outline" onClick={() => navigate("/")}><ArrowLeft className="size-4" />Edit URL</Button><Button onClick={startRun} disabled={isStarting || plan.execution === "discovery-only"}><Play className="size-4" />{isStarting ? "Starting..." : "Run tests"}</Button></>} />
+      {plan.execution === "discovery-only" && <p role="status" className="rounded-lg bg-amber-50 px-5 py-4 text-sm text-amber-900">Authenticated discovery only: these scenarios describe observed protected states. Running them requires authenticated session support, which is not yet available.</p>}
+      <div className="flex flex-wrap items-center gap-3 rounded-xl border border-slate-200 bg-white px-5 py-4 text-sm"><Badge variant="info">{plan.execution === "discovery-only" ? "Discovery only" : "Ready"}</Badge><span className="break-all font-medium text-slate-900">{url}</span><span className="text-slate-400">•</span><span className="text-slate-500">{plan.tests.length} generated tests</span></div>
       <div className="space-y-4">{plan.tests.map((scenario) => (
         <Card key={scenario.id}>
           <CardContent className="flex gap-4">
