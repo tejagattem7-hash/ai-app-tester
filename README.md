@@ -66,6 +66,16 @@ See [guarded authenticated execution and verification](docs/authenticated-execut
 
 See [architecture, security boundaries, exact observations and manual instructions](docs/authenticated-exploration.md) and [live regression evidence](docs/authenticated-verification.json).
 
+## Optional transactional test-workflow exploration
+
+Read-only exploration remains the default. **Explore transactional test workflows** is a separate, unchecked option under automatic exploration. `POST /api/explore` accepts `transactionalExploration: true`, with or without the existing authentication options. This mode requires the starting origin in the backend's comma-separated `TEST_TRANSACTIONAL_ORIGINS`; each entry must be an exact HTTP(S) origin without a path, query, fragment or credentials. An empty setting disables the mode. Authentication-origin configuration alone does not authorize transactions. Configure only test/demo applications whose state may be changed.
+
+The generic explorer follows observed Add to cart → Cart → Checkout → Continue → Finish controls, including accessible role-button icons, using the same browser context. It does not contain application-specific routes, selectors, products or credentials. It fills only recognized non-sensitive test fields, with deterministic placeholder values; payment, account, security, hidden and unknown fields stop submission. An empty-form attempt is recorded only when it changes observed page metadata. Mutation requests remain blocked except for one POST to a checked live form action containing exactly its approved test fields. External requests, destructive controls, WebSockets, popups and downloads remain blocked.
+
+Transactional limits are **10 states, depth 8, 20 interactions/attempts and 60 seconds overall**, including login and field fills. The explorer uses one forward path, with observed Back/Remove controls allowed, and never reloads/replays mutable branches. Plans use only recorded transitions and exact recorded fills. Transactional plans are **review-only**, enforced in both frontend and backend: the current guarded runner has no transactional replay or test-state reset support. Transactional exploration does not create a temporary credential-retaining run workflow.
+
+See [transactional architecture, safety and live results](docs/transactional-exploration.md) and [exact observations and generated plan](docs/transactional-verification.json).
+
 ## AI test planning
 
 Set `OPENAI_API_KEY` and `OPENAI_MODEL` in the server process environment (see `.env.example` for the required names). `POST /api/test-plans` accepts the complete JSON response from `/api/discover` or `/api/explore` and returns the identified page purpose plus a complexity-based set of 1–15 validated test scenarios. It aims for at least three when that many meaningful, non-duplicate tests exist. It uses recorded transitions to plan workflows across observed states and never assumes that advertised or authenticated capabilities were reached. It creates plans only; it does not execute actions.

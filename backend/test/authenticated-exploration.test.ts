@@ -247,7 +247,7 @@ describe("optional authenticated exploration", () => {
   it("validates complete UI credential pairs without trimming passwords or exposing values", () => {
     const input = { url: baseUrl, authenticated: true }
     assert.deepEqual(exploreRequestSchema.parse({ ...input, username: ` ${USER} `, password: ` ${PASSWORD} ` }), {
-      ...input, username: USER, password: ` ${PASSWORD} `,
+      ...input, transactionalExploration: false, username: USER, password: ` ${PASSWORD} `,
     })
     for (const credentials of [
       { username: USER }, { password: PASSWORD }, { username: "", password: PASSWORD },

@@ -8,6 +8,7 @@ import { SecretRedactor } from "../utils/secret-redaction.js"
 
 export async function executeAuthenticatedRun(workflow: AuthWorkflow, dependencies?: DiscoveryDependencies): Promise<TestRunResult> {
   if (workflow.state !== "running" || !workflow.plan || workflow.controller.signal.aborted) throw new WorkflowError()
+  if (workflow.discovery.transactionalExploration || workflow.plan.execution === "review-only") throw new WorkflowError("workflow-review-only")
   const plan = workflow.plan
   const results: ScenarioExecutionResult[] = []
   const redactor = new SecretRedactor([workflow.credentials.username, workflow.credentials.password, workflow.id, workflow.owner])

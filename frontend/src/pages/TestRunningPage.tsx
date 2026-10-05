@@ -28,6 +28,7 @@ export function TestRunningPage() {
     const timeout = window.setTimeout(() => {
       void (async () => {
         try {
+          if (state.plan.execution === "review-only") throw new Error(state.plan.executionReason ?? "Transactional plans are review-only.")
           if (state.plan.execution === "discovery-only" && !id) throw new Error("This authenticated workflow is unavailable. Start a new test and sign in again.")
           started = true
           const run = await runTests(state.url, state.plan, id, id ? controller.signal : undefined)

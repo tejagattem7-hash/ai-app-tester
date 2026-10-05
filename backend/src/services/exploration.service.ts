@@ -5,6 +5,8 @@ import { EXPLORATION_ACTION_TIMEOUT_MS, EXPLORATION_TIMEOUT_MS, MAX_EXPLORATION_
 import { explorationResultSchema, type ExploredPage, type ExplorationResult, type NavigationControl } from "../schemas/exploration-result.schema.js"
 import { isExternalAuthenticationControl, isSafeAuthenticatedNavigationControl, isSafeNavigationControl } from "../utils/exploration-safety.js"
 import { SecretRedactor } from "../utils/secret-redaction.js"
+import { assertTransactionalOrigin, MAX_TRANSACTIONAL_DEPTH, MAX_TRANSACTIONAL_INTERACTIONS, MAX_TRANSACTIONAL_STATES, TRANSACTIONAL_TIMEOUT_MS } from "../config/transactional.js"
+import { nextTransactionalPhase, transactionalCandidates, TRANSACTIONAL_CONTROL_SELECTOR, type TransactionalNetworkGuard } from "../utils/transactional-safety.js"
 import { assertPublicHttpUrl, PublicUrlError } from "../utils/public-url.js"
 import { authenticate, findLoginControls, rememberSessionSecrets } from "./authentication.service.js"
 import { DiscoveryBudgetError, DiscoveryCapacityError, DiscoveryNavigationError, extractPageDetails, waitForRenderedPage, withDiscoverySession, type AuthenticationNetworkGuard, type DiscoveryDependencies, type DiscoverySession } from "./discovery.service.js"
@@ -145,21 +147,26 @@ async function restoreState(session: DiscoverySession, state: QueuedState, befor
   }
 }
 
-function emptyExploration(rawUrl: string): ExplorationResult {
+function emptyExploration(rawUrl: string, transactional = false): ExplorationResult {
   return {
     startUrl: rawUrl,
     pages: [],
     transitions: [],
-    limits: { maxPages: MAX_EXPLORATION_PAGES, maxDepth: MAX_EXPLORATION_DEPTH, timeoutMs: EXPLORATION_TIMEOUT_MS, maxInteractions: MAX_EXPLORATION_INTERACTIONS },
+    limits: transactional
+      ? { maxPages: MAX_TRANSACTIONAL_STATES, maxDepth: MAX_TRANSACTIONAL_DEPTH, timeoutMs: TRANSACTIONAL_TIMEOUT_MS, maxInteractions: MAX_TRANSACTIONAL_INTERACTIONS }
+      : { maxPages: MAX_EXPLORATION_PAGES, maxDepth: MAX_EXPLORATION_DEPTH, timeoutMs: EXPLORATION_TIMEOUT_MS, maxInteractions: MAX_EXPLORATION_INTERACTIONS },
+    ...(transactional ? { transactionalExploration: { enabled: true as const, execution: "review-only" as const } } : {}),
     completionReason: "complete",
     warnings: [],
   }
 }
 
 export async function exploreApplication(rawUrl: string, dependencies?: DiscoveryDependencies, options: {
-  authenticated?: boolean; credentials?: LoginCredentials; signal?: AbortSignal
+  authenticated?: boolean; credentials?: LoginCredentials; signal?: AbortSignal; transactionalExploration?: boolean
   inspectAuthenticated?: (session: DiscoverySession, redactor: SecretRedactor, beforeInteraction: () => void) => Promise<void>
 } = {}): Promise<ExplorationResult> {
+  if (options.transactionalExploration) assertTransactionalOrigin(rawUrl)
+  const transactional: TransactionalNetworkGuard | undefined = options.transactionalExploration ? { phase: "catalog" } : undefined
   const credentials = options.authenticated ? getTestCredentials(rawUrl, options.credentials) : undefined
   const redactor = credentials ? new SecretRedactor([credentials.username, credentials.password]) : undefined
   const guard: AuthenticationNetworkGuard | undefined = credentials ? {
@@ -180,7 +187,7 @@ export async function exploreApplication(rawUrl: string, dependencies?: Discover
       let interactions = 0
       let attempts = 0
       const beforeClick = () => {
-        if (interactions >= MAX_EXPLORATION_INTERACTIONS) throw new ExplorationInteractionLimitError()
+        if (interactions >= (transactional ? MAX_TRANSACTIONAL_INTERACTIONS : MAX_EXPLORATION_INTERACTIONS)) throw new ExplorationInteractionLimitError()
         interactions += 1
       }
       const capture = async () => {
@@ -284,20 +291,111 @@ export async function exploreApplication(rawUrl: string, dependencies?: Discover
         if (depthLimited) result.completionReason = "depth-limit"
         return false
       }
+      const walkTransactional = async (entryUrl: string) => {
+        result.startUrl = redactor ? redactor.sanitize(entryUrl) : entryUrl
+        let metadata = await capture()
+        let state: ExploredPage = { ...metadata, id: "state-1", depth: 0 }
+        result.pages.push(state)
+        const visited = new Map([[stateFingerprint(metadata), state.id]])
+        const attempted = new Set<string>()
+        const validationAttempted = new Set<string>()
+        // Follow a single observed forward path in the existing context. Never
+        // restore/replay mutable branches: a replay could add or order twice.
+        while (transactional!.phase !== "complete") {
+          session.remainingTimeMs()
+          const candidates = (await transactionalCandidates(session.page, session.initialUrl.origin, transactional!.phase))
+            .filter((candidate) => !redactor || redactor.text(JSON.stringify(candidate)) === JSON.stringify(candidate))
+          if (state.depth >= MAX_TRANSACTIONAL_DEPTH) {
+            if (candidates.length) result.completionReason = "depth-limit"
+            break
+          }
+          const candidate = candidates.find((item) => !attempted.has(`${state.id}:${JSON.stringify(item.control)}`))
+          if (!candidate) break
+          if (attempts >= MAX_TRANSACTIONAL_INTERACTIONS) { result.completionReason = "interaction-limit"; break }
+          attempts += 1
+          const key = `${state.id}:${JSON.stringify(candidate.control)}`
+          const validationKey = `${session.page.url()}:${JSON.stringify(candidate.control)}`
+          const emptyFields = await session.page.evaluate((indexes) => {
+            const inputs = document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>("body input, body textarea, body select")
+            return indexes.every((index) => inputs[index]?.value === "")
+          }, candidate.inputIndexes)
+          const validation = candidate.fills.length > 0 && emptyFields && !validationAttempted.has(validationKey)
+          if (validation) validationAttempted.add(validationKey)
+          else attempted.add(key)
+          const phase = transactional!.phase
+          try {
+            // Recheck live form metadata, field types and destinations immediately
+            // before entry and submission. Changed controls fail closed.
+            const live = await transactionalCandidates(session.page, session.initialUrl.origin, phase)
+            if (!live.some((item) => JSON.stringify(item) === JSON.stringify(candidate))) throw new DiscoveryNavigationError("The test workflow control changed")
+            if (candidate.control.href) await (dependencies?.validateUrl ?? assertPublicHttpUrl)(candidate.control.href)
+            if (!validation) {
+              for (let index = 0; index < candidate.fills.length; index += 1) {
+                const current = await transactionalCandidates(session.page, session.initialUrl.origin, phase)
+                if (!current.some((item) => JSON.stringify(item) === JSON.stringify(candidate))) throw new DiscoveryNavigationError("The test form changed")
+                beforeClick()
+                await session.page.locator("body input, body textarea, body select").nth(candidate.inputIndexes[index]!).fill(candidate.fills[index]!.value,
+                  { timeout: Math.min(EXPLORATION_ACTION_TIMEOUT_MS, session.remainingTimeMs()) })
+              }
+            }
+            transactional!.activeIntent = candidate.intent
+            transactional!.approvedPost = validation ? undefined : candidate.approvedPost
+            transactional!.postUsed = false
+            // Permit only workflow destinations during this specific interaction.
+            transactional!.phase = nextTransactionalPhase(phase, candidate.intent)
+            beforeClick()
+            await session.page.locator(TRANSACTIONAL_CONTROL_SELECTOR).nth(candidate.index).click({ timeout: Math.min(EXPLORATION_ACTION_TIMEOUT_MS, session.remainingTimeMs()) })
+            await settlePage(session)
+            metadata = await capture()
+            const fingerprint = stateFingerprint(metadata)
+            if (validation) transactional!.phase = phase
+            if (fingerprint === stateFingerprint(state)) {
+              transactional!.phase = phase
+              // A required-field browser bubble is not observable page evidence.
+              continue
+            }
+            let targetId = visited.get(fingerprint)
+            if (!targetId) {
+              targetId = `state-${result.pages.length + 1}`
+              const child = { ...metadata, id: targetId, depth: state.depth + 1 }
+              result.pages.push(child)
+              visited.set(fingerprint, targetId)
+            }
+            result.transitions.push({ fromStateId: state.id, toStateId: targetId,
+              control: redactor ? redactor.sanitize(candidate.control) : candidate.control,
+              interaction: { intent: candidate.intent, fills: validation ? [] : candidate.fills, ...(validation ? { validationAttempt: true as const } : {}) } })
+            state = result.pages.find((item) => item.id === targetId)!
+            if (result.pages.length >= MAX_TRANSACTIONAL_STATES) { result.completionReason = "page-limit"; break }
+          } catch (error) {
+            transactional!.phase = phase
+            attempted.add(key)
+            warn(error)
+            // Stop after an uncertain mutation; don't try a second purchase path.
+            break
+          } finally {
+            transactional!.activeIntent = undefined
+            transactional!.approvedPost = undefined
+          }
+        }
+      }
       if (credentials) {
         if (!await walk(session.initialUrl.href, true)) throw new AuthenticationError("login-controls-not-found")
         // Drop all entry metadata and paths; protected discovery starts at the
         // verified authenticated state, using the very same context and page.
         const protectedUrl = session.page.url()
         if (new URL(protectedUrl).search || new URL(protectedUrl).hash) throw new AuthenticationError("authentication-unconfirmed")
-        result = emptyExploration(protectedUrl)
+        result = emptyExploration(protectedUrl, !!transactional)
         result.authentication = { status: "authenticated", execution: "discovery-only" }
         if (options.inspectAuthenticated) {
           result.pages.push({ ...await capture(), id: "state-1", depth: 0 })
           await options.inspectAuthenticated(session, redactor!, beforeClick)
-        } else await walk(protectedUrl)
+        } else if (transactional) await walkTransactional(protectedUrl)
+        else await walk(protectedUrl)
+      } else if (transactional) {
+        result = emptyExploration(session.initialUrl.href, true)
+        await walkTransactional(session.initialUrl.href)
       } else await walk(session.initialUrl.href)
-    }, { sameOriginOnly: true, timeoutMs: EXPLORATION_TIMEOUT_MS, authentication: guard, signal: options.signal }, dependencies)
+    }, { sameOriginOnly: true, timeoutMs: transactional ? TRANSACTIONAL_TIMEOUT_MS : EXPLORATION_TIMEOUT_MS, authentication: guard, transactional, signal: options.signal }, dependencies)
   } catch (error) {
     if (options.inspectAuthenticated || options.signal?.aborted) throw error
     // Return useful partial observations at the deadline, but never invent an

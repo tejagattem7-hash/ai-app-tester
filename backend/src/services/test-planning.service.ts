@@ -1,6 +1,6 @@
 import type { TestPlanningLlmProvider } from "../providers/llm/test-planning.provider.js"
 import type { ExplorationResult, PlanningDiscovery } from "../schemas/exploration-result.schema.js"
-import { MAX_TEST_SCENARIOS, testPlanSchema, type TestPlan } from "../schemas/test-plan.schema.js"
+import { MAX_TEST_SCENARIOS, testPlanSchema, type TestAction, type TestPlan } from "../schemas/test-plan.schema.js"
 import { configuredSecretRedactor, type SecretRedactor } from "../utils/secret-redaction.js"
 
 export class InvalidTestPlanError extends Error {
@@ -30,7 +30,8 @@ Rules:
 - Avoid scenarios that test the same behavior with only superficial wording or data changes.
 - Avoid destructive, irreversible, financial, account-creation, or data-deletion actions.
 - End each scenario with at least one assertText or assertUrl action.
-- When authentication.status is authenticated, startUrl is an already authenticated root. Authentication happened separately; never generate login, credentials or session setup actions. Use only recorded read/view/navigation clicks and assertions. Do not fill, select, check or submit authenticated forms. Execution authorization is handled separately; do not describe execution availability in the plan.
+- When authentication.status is authenticated, startUrl is an already authenticated root. Authentication happened separately; never generate login, credentials or session setup actions. Unless transactionalExploration.enabled is true, use only recorded read/view/navigation clicks and assertions. Do not fill, select, check or submit read-only authenticated forms. Execution authorization is handled separately; do not describe execution availability in the plan.
+- When transactionalExploration.enabled is true, cover the actually observed cart, checkout, required-field validation, summary and completion states. For each recorded transition, replay interaction.fills in order with their EXACT target and value before its click. An empty validationAttempt has no fills. These configured demo workflows may include Add to cart, Checkout, Continue and Finish. Do not invent payment, unobserved validation or purchase behavior. Plans are reviewed separately from execution.
 - Give every scenario a unique lowercase kebab-case id.`
 
 function createModelInput(discovery: PlanningDiscovery): string {
@@ -54,6 +55,7 @@ function validateObservedWorkflow(plan: TestPlan, discovery: ExplorationResult):
   const root = discovery.pages[0]!
   for (const test of plan.tests) {
     let stateIds = new Set([root.id])
+    let pendingFills: { target: string; value: string }[] = []
     if (test.actions[0]?.type !== "navigate" || test.actions[0].url !== discovery.startUrl) {
       throw new InvalidTestPlanError(`Test ${test.id} must start at the observed application entry URL`)
     }
@@ -61,17 +63,27 @@ function validateObservedWorkflow(plan: TestPlan, discovery: ExplorationResult):
       const states = [...stateIds].map((id) => pages.get(id)!)
       switch (action.type) {
         case "navigate":
+          if (pendingFills.length) throw new InvalidTestPlanError("Test data must belong to an observed submission")
           if (action.url !== discovery.startUrl) throw new InvalidTestPlanError(`Test ${test.id} navigates outside the observed entry path`)
           stateIds = new Set([root.id])
           break
         case "click": {
-          const transitions = discovery.transitions.filter((edge) => stateIds.has(edge.fromStateId) && edge.control.text === action.target)
+          const transitions = discovery.transitions.filter((edge) => stateIds.has(edge.fromStateId) && edge.control.text === action.target
+            && (!discovery.transactionalExploration || JSON.stringify(edge.interaction?.fills) === JSON.stringify(pendingFills)))
           if (!transitions.length) throw new InvalidTestPlanError(`Test ${test.id} clicks a control without an observed transition: ${action.target}`)
           stateIds = new Set(transitions.map((edge) => edge.toStateId))
+          pendingFills = []
           break
         }
         case "fill":
-          if (discovery.authentication) throw new InvalidTestPlanError("Authenticated plans support only observed navigation and assertions")
+          if (discovery.authentication && !discovery.transactionalExploration) throw new InvalidTestPlanError("Authenticated plans support only observed navigation and assertions")
+          if (discovery.transactionalExploration) {
+            pendingFills.push({ target: action.target, value: action.value })
+            if (!discovery.transitions.some((edge) => stateIds.has(edge.fromStateId)
+              && JSON.stringify(edge.interaction?.fills.slice(0, pendingFills.length)) === JSON.stringify(pendingFills))) {
+              throw new InvalidTestPlanError("Transactional test data must exactly match observed deterministic fills")
+            }
+          }
           if (!states.every((page) => page.inputs.some((input) => !input.disabled
             && [input.label, input.name, input.id, input.placeholder].includes(action.target)))) {
             throw new InvalidTestPlanError(`Test ${test.id} fills an input absent from its observed state`)
@@ -94,7 +106,55 @@ function validateObservedWorkflow(plan: TestPlan, discovery: ExplorationResult):
           throw new InvalidTestPlanError(`Test ${test.id} uses an action unsupported by the current runner`)
       }
     }
+    if (pendingFills.length) throw new InvalidTestPlanError("Test data must belong to an observed submission")
   }
+}
+
+function completeTransactionalCoverage(plan: TestPlan, discovery: ExplorationResult): TestPlan {
+  const paths = new Map<string, TestAction[]>([[discovery.pages[0]!.id, [{ type: "navigate", url: discovery.startUrl }]]])
+  // Choose the least costly observed path, including every deterministic fill.
+  for (let pass = 0; pass < discovery.pages.length; pass += 1) {
+    for (const edge of discovery.transitions) {
+      const prefix = paths.get(edge.fromStateId)
+      if (!prefix) continue
+      const path: TestAction[] = [...prefix, ...edge.interaction!.fills.map((fill) => ({ type: "fill" as const, ...fill })), { type: "click", target: edge.control.text }]
+      if (!paths.has(edge.toStateId) || paths.get(edge.toStateId)!.length > path.length) paths.set(edge.toStateId, path)
+    }
+  }
+  const covered = () => {
+    const result = new Set<string>()
+    for (const test of plan.tests) {
+      let states = new Set([discovery.pages[0]!.id])
+      let fills: { target: string; value: string }[] = []
+      for (const action of test.actions) {
+        if (action.type === "navigate") states = new Set([discovery.pages[0]!.id])
+        if (action.type === "fill") fills.push({ target: action.target, value: action.value })
+        if (action.type === "click") {
+          const edges = discovery.transitions.filter((edge) => states.has(edge.fromStateId) && edge.control.text === action.target
+            && JSON.stringify(edge.interaction!.fills) === JSON.stringify(fills))
+          edges.forEach((edge) => result.add(JSON.stringify(edge)))
+          states = new Set(edges.map((edge) => edge.toStateId)); fills = []
+        }
+      }
+    }
+    return result
+  }
+  // A model can omit an observed final step to fit the action limit. Complete
+  // missing coverage deterministically from evidence, never invented controls.
+  for (const edge of [...discovery.transitions].reverse()) {
+    if (covered().has(JSON.stringify(edge))) continue
+    const prefix = paths.get(edge.fromStateId)
+    if (!prefix) continue
+    const actions: TestAction[] = [...prefix, ...edge.interaction!.fills.map((fill) => ({ type: "fill" as const, ...fill })),
+      { type: "click", target: edge.control.text }, { type: "assertUrl", url: discovery.pages.find((page) => page.id === edge.toStateId)!.url }]
+    if (actions.length > 12) continue // Never emit a plan the runner schema cannot represent.
+    let id = `observed-workflow-${plan.tests.length + 1}`
+    while (plan.tests.some((test) => test.id === id)) id += "-observed"
+    plan.tests.push({ id, title: `Verify observed ${edge.control.text} workflow`, category: edge.interaction!.validationAttempt ? "validation" : "functional",
+      reason: "Covers a recorded test-workflow transition omitted from the generated scenarios.", expectedOutcome: "The recorded destination state is reached using only observed controls and test data.", actions })
+  }
+  if (plan.tests.length > MAX_TEST_SCENARIOS) throw new InvalidTestPlanError("Observed transactional coverage exceeds the scenario limit")
+  return plan
 }
 
 export async function createTestPlan(
@@ -135,6 +195,14 @@ export async function createTestPlan(
     throw new InvalidTestPlanError(`Test ${scenarioWithoutFinalAssertion.id} must end with an assertion`)
   }
 
-  if ("pages" in discovery) validateObservedWorkflow(result.data, discovery)
+  if ("pages" in discovery) {
+    validateObservedWorkflow(result.data, discovery)
+    if (discovery.transactionalExploration) {
+      completeTransactionalCoverage(result.data, discovery)
+      validateObservedWorkflow(result.data, discovery)
+    }
+  }
+  if ("pages" in discovery && discovery.transactionalExploration) return { ...result.data, execution: "review-only",
+    executionReason: "Transactional replay is not supported by the guarded runner. Cart mutations, checkout forms and test-state reset require a dedicated executor." }
   return "pages" in discovery && discovery.authentication ? { ...result.data, execution: "discovery-only" } : result.data
 }
