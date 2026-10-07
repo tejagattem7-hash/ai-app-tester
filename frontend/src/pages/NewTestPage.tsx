@@ -17,6 +17,7 @@ export function NewTestPage() {
   const [error, setError] = useState<string | null>(null)
   const [explore, setExplore] = useState(false)
   const [authenticated, setAuthenticated] = useState(false)
+  const [transactionalExploration, setTransactionalExploration] = useState(false)
   const [username, setUsername] = useState("")
   const [password, setPassword] = useState("")
   const [showUsername, setShowUsername] = useState(false)
@@ -64,7 +65,7 @@ export function NewTestPage() {
 
     try {
       const credentials = authenticated && authMode === "manual" ? { username: username.trim(), password } : undefined
-      const discovery = await (explore ? exploreApplication(submittedUrl, authenticated, credentials, (id) => { operation.id = id }, operation.controller.signal) : discoverPage(submittedUrl))
+      const discovery = await (explore ? exploreApplication(submittedUrl, authenticated, credentials, (id) => { operation.id = id }, operation.controller.signal, transactionalExploration) : discoverPage(submittedUrl))
       clearCredentials()
       const plan = await createTestPlan(discovery, operation.id, operation.controller.signal)
       if (operation.controller.signal.aborted) return
@@ -101,12 +102,17 @@ export function NewTestPage() {
             <label className="mt-4 flex items-center gap-2 text-sm text-slate-600">
               <input type="checkbox" checked={explore} onChange={(event) => {
                 setExplore(event.target.checked)
-                if (!event.target.checked) { setAuthenticated(false); setAuthMode("manual"); clearCredentials(); setError(null) }
+                if (!event.target.checked) { setAuthenticated(false); setTransactionalExploration(false); setAuthMode("manual"); clearCredentials(); setError(null) }
               }} disabled={isLoading} aria-describedby="explore-help" />
               Explore additional pages automatically
             </label>
-            <p id="explore-help" className="mt-2 text-xs text-slate-500">May inspect up to 5 related pages and take a minute.</p>
+            <p id="explore-help" className="mt-2 text-xs text-slate-500">{transactionalExploration ? "May inspect up to 10 workflow states and take a minute." : "May inspect up to 5 related pages and take a minute."}</p>
             {explore && <>
+              <label className="mt-3 flex items-center gap-2 text-sm text-slate-600">
+                <input type="checkbox" checked={transactionalExploration} onChange={(event) => { setTransactionalExploration(event.target.checked); setError(null) }} disabled={isLoading} aria-describedby="transactional-help" />
+                Explore transactional test workflows
+              </label>
+              <p id="transactional-help" className="mt-2 text-xs text-slate-500">For configured test/demo applications only. May add an item to a cart and complete a test checkout using placeholder data. Explores up to 10 states in one minute; generated plans are review-only.</p>
               <label className="mt-3 flex items-center gap-2 text-sm text-slate-600">
                 <input type="checkbox" checked={authenticated} onChange={(event) => {
                   setAuthenticated(event.target.checked)
@@ -151,7 +157,7 @@ export function NewTestPage() {
                 </div>}
                 <p id="credentials-help" className="text-xs text-slate-500">Credentials are used only to sign in and explore the application. They are not sent to the AI model or included in test results.</p>
                 {credentialError === "credentials-required" && <p role="alert" className="text-xs text-red-700">{discoveryErrorMessage(credentialError)}</p>}
-                <p className="text-xs text-slate-500">Authentication is held temporarily for this test workflow. Only observed safe navigation and assertions can run.</p>
+                <p className="text-xs text-slate-500">{transactionalExploration ? "The same signed-in session is used during exploration. Transactional plans can be reviewed but cannot run yet." : "Authentication is held temporarily for this test workflow. Only observed safe navigation and assertions can run."}</p>
               </div>}
             </>}
             {error && <p role="alert" className="mt-3 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p>}

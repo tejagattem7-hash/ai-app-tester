@@ -50,8 +50,8 @@ export function discoverPage(url: string): Promise<DiscoveryResult> {
   return postJson<DiscoveryResult>("/api/discover", { url }, (code) => discoveryErrorMessage(code))
 }
 
-export function exploreApplication(url: string, authenticated = false, credentials?: { username: string; password: string }, onWorkflow?: (id: string) => void, signal?: AbortSignal): Promise<ExplorationResult> {
-  return postJson<ExplorationResult>("/api/explore", { url, authenticated, ...(authenticated ? credentials : undefined) },
+export function exploreApplication(url: string, authenticated = false, credentials?: { username: string; password: string }, onWorkflow?: (id: string) => void, signal?: AbortSignal, transactionalExploration = false): Promise<ExplorationResult> {
+  return postJson<ExplorationResult>("/api/explore", { url, authenticated, ...(transactionalExploration ? { transactionalExploration: true } : {}), ...(authenticated ? credentials : undefined) },
     (code) => discoveryErrorMessage(code, authenticated, credentials ? "manual" : "configured"), { onWorkflow, signal })
 }
 

@@ -78,6 +78,7 @@ export class AuthWorkflowStore {
   claim(id: string, owner: string, url: string, plan: TestPlan): AuthWorkflow {
     const workflow = this.get(id, owner)
     if (workflow.state !== "ready") throw new WorkflowError("workflow-used")
+    if (workflow.discovery.transactionalExploration || workflow.plan?.execution === "review-only") throw new WorkflowError("workflow-review-only")
     if (new URL(url).origin !== workflow.origin || JSON.stringify(plan) !== JSON.stringify(workflow.plan)) throw new WorkflowError("workflow-mismatch")
     workflow.state = "running" // Atomic before any await: duplicate submissions cannot acquire it.
     return workflow

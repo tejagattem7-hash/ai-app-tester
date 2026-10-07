@@ -3,6 +3,7 @@ import { AuthenticationError, MAX_AUTH_REDIRECTS } from "../config/authenticatio
 import { MAX_VISIBLE_TEXT_CHARACTERS, type DiscoveryResult } from "../schemas/discovery-result.schema.js"
 import { hasAuthenticatedMutationIntent, hasHighRiskIntent, isExternalAuthenticationControl } from "../utils/exploration-safety.js"
 import { assertPublicHttpUrl, PublicUrlError } from "../utils/public-url.js"
+import { allowsTransactionalPost, allowsTransactionalRead, type TransactionalNetworkGuard } from "../utils/transactional-safety.js"
 
 const NAVIGATION_TIMEOUT_MS = 20_000
 const MAX_ITEMS_PER_TYPE = 200
@@ -159,6 +160,7 @@ export interface DiscoverySession {
   initialUrl: URL
   remainingTimeMs(): number
   authentication?: AuthenticationNetworkGuard
+  transactional?: TransactionalNetworkGuard
   followValidatedRedirect?(): Promise<void>
 }
 
@@ -201,7 +203,7 @@ function containsCredentials(url: URL, guard: AuthenticationNetworkGuard): boole
 export async function withDiscoverySession<T>(
   rawUrl: string,
   inspect: (session: DiscoverySession) => Promise<T>,
-  options: { sameOriginOnly?: boolean; timeoutMs?: number; authentication?: AuthenticationNetworkGuard; signal?: AbortSignal } = {},
+  options: { sameOriginOnly?: boolean; timeoutMs?: number; authentication?: AuthenticationNetworkGuard; transactional?: TransactionalNetworkGuard; signal?: AbortSignal } = {},
   dependencies: DiscoveryDependencies = defaultDependencies,
 ): Promise<T> {
   if (activeDiscoveries >= MAX_CONCURRENT_DISCOVERIES) throw new DiscoveryCapacityError()
@@ -254,12 +256,19 @@ export async function withDiscoverySession<T>(
         // In credential mode every request stays on the pinned origin. A single
         // credential-bearing login POST is the only allowed mutating request.
         if (auth && request.isNavigationRequest() && requestUrl.origin !== initialUrl.origin) auth.crossOriginRedirect = true
+        if (options.transactional && requestUrl.origin !== initialUrl.origin) return await route.abort("blockedbyclient")
         if (auth && (requestUrl.origin !== initialUrl.origin || containsCredentials(requestUrl, auth)
           || isExternalAuthenticationControl(requestUrl.pathname))) return await route.abort("blockedbyclient")
         const loginPost = auth && request.method() === "POST" && allowsLoginPost(auth, requestUrl, request.postData())
+        const transactional = options.transactional
+        // An origin allowlist never authorizes arbitrary mutations. Only one POST
+        // to the live form action, with exactly its approved test values, may pass.
+        const testPost = transactional && requestUrl.origin === initialUrl.origin && request.method() === "POST"
+          && allowsTransactionalPost(requestUrl, request.postData(), transactional)
+        const testRead = transactional && requestUrl.origin === initialUrl.origin && allowsTransactionalRead(requestUrl, transactional)
         if (options.sameOriginOnly && (
-          (!loginPost && !["GET", "HEAD"].includes(request.method()))
-          || (!loginPost && (auth?.authenticated ? hasAuthenticatedMutationIntent : hasHighRiskIntent)(`${requestUrl.pathname} ${requestUrl.search}`))
+          (!loginPost && !testPost && !["GET", "HEAD"].includes(request.method()))
+          || (!loginPost && !testPost && !testRead && (auth?.authenticated ? hasAuthenticatedMutationIntent : hasHighRiskIntent)(`${requestUrl.pathname} ${requestUrl.search}`))
           || (request.isNavigationRequest() && requestUrl.origin !== initialUrl.origin)
         )) return await route.abort("blockedbyclient")
 
@@ -286,7 +295,7 @@ export async function withDiscoverySession<T>(
               let finalUrl = requestUrl
               while ([301, 302, 303, 307, 308].includes(fetched.status())) {
                 authRedirects += 1
-                if (authRedirects > MAX_AUTH_REDIRECTS || (loginPost && [307, 308].includes(fetched.status()))) throw new AuthenticationError("authentication-unconfirmed")
+                if (authRedirects > MAX_AUTH_REDIRECTS || ((loginPost || testPost) && [307, 308].includes(fetched.status()))) throw new AuthenticationError("authentication-unconfirmed")
                 const next = new URL(fetched.headers().location ?? "", finalUrl)
                 if (next.origin !== initialUrl.origin && (loginPost || request.isNavigationRequest())) {
                   auth.crossOriginRedirect = true
@@ -294,7 +303,8 @@ export async function withDiscoverySession<T>(
                 }
                 if (next.origin !== initialUrl.origin || next.username || next.password || containsCredentials(next, auth)
                   || isExternalAuthenticationControl(next.pathname)
-                  || (auth.authenticated ? hasAuthenticatedMutationIntent : hasHighRiskIntent)(`${next.pathname} ${next.search}`)) {
+                  || (!(transactional && allowsTransactionalRead(next, transactional))
+                    && (auth.authenticated ? hasAuthenticatedMutationIntent : hasHighRiskIntent)(`${next.pathname} ${next.search}`))) {
                   throw new AuthenticationError("authentication-unconfirmed")
                 }
                 await dependencies.validateUrl(next.href)
@@ -330,7 +340,7 @@ export async function withDiscoverySession<T>(
       }
     })
 
-    if (options.authentication) await context.routeWebSocket("**/*", (socket) => socket.close())
+    if (options.authentication || options.transactional) await context.routeWebSocket("**/*", (socket) => socket.close())
 
     context.on("page", (openedPage) => {
       if (options.sameOriginOnly && page && openedPage !== page) void openedPage.close().catch(() => {})
@@ -361,7 +371,7 @@ export async function withDiscoverySession<T>(
     if (options.sameOriginOnly && new URL(page.url()).origin !== initialUrl.origin) {
       throw new DiscoveryNavigationError("Navigation left the starting origin")
     }
-    return inspect({ page, initialUrl, remainingTimeMs, authentication: options.authentication, followValidatedRedirect })
+    return inspect({ page, initialUrl, remainingTimeMs, authentication: options.authentication, transactional: options.transactional, followValidatedRedirect })
   }
 
   try {

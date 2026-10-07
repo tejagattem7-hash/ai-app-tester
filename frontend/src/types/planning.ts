@@ -57,11 +57,13 @@ export interface ExplorationResult {
     fromStateId: string
     toStateId: string
     control: { kind: "button" | "link"; text: string; href?: string }
+    interaction?: { intent: "add-to-cart" | "remove-from-cart" | "cart" | "checkout" | "continue" | "back" | "finish"; fills: { target: string; value: string }[]; validationAttempt?: true }
   }[]
   limits: { maxPages: number; maxDepth: number; timeoutMs: number; maxInteractions: number }
   completionReason: "complete" | "page-limit" | "depth-limit" | "time-limit" | "interaction-limit"
   warnings: string[]
   authentication?: { status: "authenticated"; execution: "discovery-only" }
+  transactionalExploration?: { enabled: true; execution: "review-only" }
 }
 
 export type TestAction =
@@ -85,7 +87,8 @@ export interface GeneratedTestScenario {
 }
 
 export interface TestPlan {
-  execution?: "discovery-only"
+  execution?: "discovery-only" | "review-only"
+  executionReason?: string
   pagePurpose: string
   tests: GeneratedTestScenario[]
 }

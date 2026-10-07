@@ -1,0 +1,575 @@
+{
+  "verifiedOn": "2026-10-05",
+  "verification": {
+    "typescript": { "command": "npx tsc -b --pretty false", "status": "passed" },
+    "lint": { "command": "npm run lint", "status": "passed" },
+    "productionBuild": { "command": "npm run build", "status": "passed" },
+    "backendTests": {
+      "command": "node --import tsx --test --test-concurrency=2 backend/test/*.test.ts",
+      "status": "passed", "passed": 134, "failed": 0, "suites": 15,
+      "note": "Full npm test previously passed 133 checks with one existing Chromium launch failing EPERM; the full suite passed with two workers."
+    },
+    "frontendBrowserSmoke": {
+      "status": "passed",
+      "checks": ["unchecked defaults", "reset when exploration disabled", "explicit transactional request option", "review-only reason displayed", "Run tests disabled"]
+    }
+  },
+  "originConfiguration": "Temporary verification process only; persistent configuration unchanged",
+  "checks": [
+    {
+      "name": "SauceDemo discover",
+      "status": "passed",
+      "result": {
+        "title": "Swag Labs",
+        "url": "https://www.saucedemo.com/",
+        "inputs": 3,
+        "screenshotPresent": true
+      }
+    },
+    {
+      "name": "SauceDemo Level 2",
+      "status": "passed",
+      "result": {
+        "pages": [
+          {
+            "id": "state-1",
+            "depth": 0,
+            "url": "https://www.saucedemo.com/",
+            "headings": [
+              "Accepted usernames are:",
+              "Password for all users:"
+            ]
+          }
+        ],
+        "transitions": [],
+        "limits": {
+          "maxPages": 5,
+          "maxDepth": 2,
+          "timeoutMs": 60000,
+          "maxInteractions": 20
+        },
+        "completionReason": "complete",
+        "warnings": []
+      }
+    },
+    {
+      "name": "SauceDemo read-only Level 3",
+      "status": "passed",
+      "result": {
+        "pages": [
+          {
+            "id": "state-1",
+            "depth": 0,
+            "url": "https://www.saucedemo.com/inventory.html",
+            "headings": []
+          },
+          {
+            "id": "state-2",
+            "depth": 1,
+            "url": "https://www.saucedemo.com/inventory.html",
+            "headings": []
+          }
+        ],
+        "transitions": [
+          {
+            "fromStateId": "state-1",
+            "toStateId": "state-2",
+            "control": {
+              "kind": "button",
+              "text": "Open Menu"
+            }
+          }
+        ],
+        "limits": {
+          "maxPages": 5,
+          "maxDepth": 2,
+          "timeoutMs": 60000,
+          "maxInteractions": 20
+        },
+        "completionReason": "complete",
+        "warnings": [
+          "A navigation control could not be explored safely.",
+          "A navigation control could not be explored safely.",
+          "A navigation control could not be explored safely.",
+          "A navigation control could not be explored safely.",
+          "A navigation control could not be explored safely.",
+          "A navigation control could not be explored safely.",
+          "A navigation control could not be explored safely.",
+          "A navigation control could not be explored safely.",
+          "A navigation control could not be explored safely.",
+          "A navigation control could not be explored safely.",
+          "A navigation control could not be explored safely.",
+          "A navigation control could not be explored safely.",
+          "A navigation control could not be explored safely."
+        ],
+        "authentication": {
+          "status": "authenticated",
+          "execution": "discovery-only"
+        }
+      }
+    },
+    {
+      "name": "SauceDemo transactional Level 3",
+      "status": "passed",
+      "result": {
+        "pages": [
+          {
+            "id": "state-1",
+            "depth": 0,
+            "url": "https://www.saucedemo.com/inventory.html",
+            "headings": []
+          },
+          {
+            "id": "state-2",
+            "depth": 1,
+            "url": "https://www.saucedemo.com/inventory.html",
+            "headings": []
+          },
+          {
+            "id": "state-3",
+            "depth": 2,
+            "url": "https://www.saucedemo.com/cart.html",
+            "headings": []
+          },
+          {
+            "id": "state-4",
+            "depth": 3,
+            "url": "https://www.saucedemo.com/checkout-step-one.html",
+            "headings": []
+          },
+          {
+            "id": "state-5",
+            "depth": 4,
+            "url": "https://www.saucedemo.com/checkout-step-one.html",
+            "headings": [
+              "Error: First Name is required"
+            ]
+          },
+          {
+            "id": "state-6",
+            "depth": 5,
+            "url": "https://www.saucedemo.com/checkout-step-two.html",
+            "headings": []
+          },
+          {
+            "id": "state-7",
+            "depth": 6,
+            "url": "https://www.saucedemo.com/checkout-complete.html",
+            "headings": [
+              "Thank you for your order!"
+            ]
+          }
+        ],
+        "transitions": [
+          {
+            "fromStateId": "state-1",
+            "toStateId": "state-2",
+            "control": {
+              "kind": "button",
+              "text": "Add to cart"
+            },
+            "interaction": {
+              "intent": "add-to-cart",
+              "fills": []
+            }
+          },
+          {
+            "fromStateId": "state-2",
+            "toStateId": "state-3",
+            "control": {
+              "kind": "button",
+              "text": "Cart"
+            },
+            "interaction": {
+              "intent": "cart",
+              "fills": []
+            }
+          },
+          {
+            "fromStateId": "state-3",
+            "toStateId": "state-4",
+            "control": {
+              "kind": "button",
+              "text": "Checkout"
+            },
+            "interaction": {
+              "intent": "checkout",
+              "fills": []
+            }
+          },
+          {
+            "fromStateId": "state-4",
+            "toStateId": "state-5",
+            "control": {
+              "kind": "button",
+              "text": "Continue"
+            },
+            "interaction": {
+              "intent": "continue",
+              "fills": [],
+              "validationAttempt": true
+            }
+          },
+          {
+            "fromStateId": "state-5",
+            "toStateId": "state-6",
+            "control": {
+              "kind": "button",
+              "text": "Continue"
+            },
+            "interaction": {
+              "intent": "continue",
+              "fills": [
+                {
+                  "target": "firstName",
+                  "value": "Test"
+                },
+                {
+                  "target": "lastName",
+                  "value": "User"
+                },
+                {
+                  "target": "postalCode",
+                  "value": "00000"
+                }
+              ]
+            }
+          },
+          {
+            "fromStateId": "state-6",
+            "toStateId": "state-7",
+            "control": {
+              "kind": "button",
+              "text": "Finish"
+            },
+            "interaction": {
+              "intent": "finish",
+              "fills": []
+            }
+          }
+        ],
+        "limits": {
+          "maxPages": 10,
+          "maxDepth": 8,
+          "timeoutMs": 60000,
+          "maxInteractions": 20
+        },
+        "completionReason": "complete",
+        "warnings": [],
+        "authentication": {
+          "status": "authenticated",
+          "execution": "discovery-only"
+        },
+        "transactionalExploration": {
+          "enabled": true,
+          "execution": "review-only"
+        },
+        "targets": {
+          "/inventory.html": true,
+          "/cart.html": true,
+          "/checkout-step-one.html": true,
+          "/checkout-step-two.html": true,
+          "/checkout-complete.html": true
+        }
+      }
+    },
+    {
+      "name": "AI Life Planner discover",
+      "status": "passed",
+      "result": {
+        "title": "AI Life Planner - Your life, planned intelligently",
+        "url": "https://ai-life-planner-seven.vercel.app/",
+        "inputs": 0
+      }
+    },
+    {
+      "name": "AI Life Planner Level 2",
+      "status": "passed",
+      "result": {
+        "pages": [
+          {
+            "id": "state-1",
+            "depth": 0,
+            "url": "https://ai-life-planner-seven.vercel.app/",
+            "headings": [
+              "Make time for the life you actually want.",
+              "Planning that sees the bigger picture.",
+              "AI Planning",
+              "Smart Calendar",
+              "Goals",
+              "Health & Fitness"
+            ]
+          },
+          {
+            "id": "state-2",
+            "depth": 1,
+            "url": "https://ai-life-planner-seven.vercel.app/auth",
+            "headings": [
+              "Create your account"
+            ]
+          },
+          {
+            "id": "state-3",
+            "depth": 2,
+            "url": "https://ai-life-planner-seven.vercel.app/auth",
+            "headings": [
+              "Welcome back"
+            ]
+          }
+        ],
+        "transitions": [
+          {
+            "fromStateId": "state-1",
+            "toStateId": "state-2",
+            "control": {
+              "kind": "button",
+              "text": "Get Started →"
+            }
+          },
+          {
+            "fromStateId": "state-1",
+            "toStateId": "state-2",
+            "control": {
+              "kind": "button",
+              "text": "Sign in"
+            }
+          },
+          {
+            "fromStateId": "state-2",
+            "toStateId": "state-3",
+            "control": {
+              "kind": "button",
+              "text": "Log in"
+            }
+          }
+        ],
+        "limits": {
+          "maxPages": 5,
+          "maxDepth": 2,
+          "timeoutMs": 60000,
+          "maxInteractions": 20
+        },
+        "completionReason": "depth-limit",
+        "warnings": []
+      }
+    }
+  ],
+  "plan": {
+    "pagePurpose": "Swag Labs is a demo shopping application for browsing products, adding items to a cart, and completing checkout. The observed authenticated workflow covers adding a backpack, viewing the cart, required-field validation, checkout summary, and order completion.",
+    "tests": [
+      {
+        "id": "add-backpack-and-view-cart",
+        "title": "Add the backpack and verify its presence in the cart",
+        "category": "functional",
+        "reason": "Verify the observed inventory-to-cart workflow and the product control's change after adding an item.",
+        "expectedOutcome": "The backpack's inventory control displays Remove, and the cart contains Sauce Labs Backpack with Checkout available.",
+        "actions": [
+          {
+            "type": "navigate",
+            "url": "https://www.saucedemo.com/inventory.html"
+          },
+          {
+            "type": "click",
+            "target": "Add to cart"
+          },
+          {
+            "type": "assertText",
+            "target": "Sauce Labs Backpack product's Remove button",
+            "text": "Remove"
+          },
+          {
+            "type": "click",
+            "target": "Cart"
+          },
+          {
+            "type": "assertUrl",
+            "url": "https://www.saucedemo.com/cart.html"
+          },
+          {
+            "type": "assertText",
+            "target": "Sauce Labs Backpack product link",
+            "text": "Sauce Labs Backpack"
+          },
+          {
+            "type": "assertText",
+            "target": "Checkout button",
+            "text": "Checkout"
+          }
+        ]
+      },
+      {
+        "id": "empty-checkout-required-name",
+        "title": "Display first-name validation when checkout information is empty",
+        "category": "validation",
+        "reason": "Exercise the recorded empty submission and verify its observed required-field error without inferring other validation rules.",
+        "expectedOutcome": "Checkout remains on the information page and displays Error: First Name is required.",
+        "actions": [
+          {
+            "type": "navigate",
+            "url": "https://www.saucedemo.com/inventory.html"
+          },
+          {
+            "type": "click",
+            "target": "Add to cart"
+          },
+          {
+            "type": "click",
+            "target": "Cart"
+          },
+          {
+            "type": "click",
+            "target": "Checkout"
+          },
+          {
+            "type": "assertUrl",
+            "url": "https://www.saucedemo.com/checkout-step-one.html"
+          },
+          {
+            "type": "click",
+            "target": "Continue"
+          },
+          {
+            "type": "assertUrl",
+            "url": "https://www.saucedemo.com/checkout-step-one.html"
+          },
+          {
+            "type": "assertText",
+            "target": "First Name required error heading",
+            "text": "Error: First Name is required"
+          }
+        ]
+      },
+      {
+        "id": "recover-validation-and-complete-checkout",
+        "title": "Correct empty checkout information, review the backpack, and finish",
+        "category": "functional",
+        "reason": "Verify recovery from the observed validation error and the complete configured demo workflow through summary and confirmation.",
+        "expectedOutcome": "Entering the recorded customer information advances to a summary containing Sauce Labs Backpack. Finish opens the completion page with Thank you for your order!",
+        "actions": [
+          {
+            "type": "navigate",
+            "url": "https://www.saucedemo.com/inventory.html"
+          },
+          {
+            "type": "click",
+            "target": "Add to cart"
+          },
+          {
+            "type": "click",
+            "target": "Cart"
+          },
+          {
+            "type": "click",
+            "target": "Checkout"
+          },
+          {
+            "type": "click",
+            "target": "Continue"
+          },
+          {
+            "type": "assertText",
+            "target": "First Name required error heading",
+            "text": "Error: First Name is required"
+          },
+          {
+            "type": "fill",
+            "target": "firstName",
+            "value": "Test"
+          },
+          {
+            "type": "fill",
+            "target": "lastName",
+            "value": "User"
+          },
+          {
+            "type": "fill",
+            "target": "postalCode",
+            "value": "00000"
+          },
+          {
+            "type": "click",
+            "target": "Continue"
+          },
+          {
+            "type": "assertUrl",
+            "url": "https://www.saucedemo.com/checkout-step-two.html"
+          },
+          {
+            "type": "assertText",
+            "target": "Sauce Labs Backpack product link",
+            "text": "Sauce Labs Backpack"
+          }
+        ]
+      },
+      {
+        "id": "observed-workflow-4",
+        "title": "Verify observed Finish workflow",
+        "category": "functional",
+        "reason": "Covers a recorded test-workflow transition omitted from the generated scenarios.",
+        "expectedOutcome": "The recorded destination state is reached using only observed controls and test data.",
+        "actions": [
+          {
+            "type": "navigate",
+            "url": "https://www.saucedemo.com/inventory.html"
+          },
+          {
+            "type": "click",
+            "target": "Add to cart"
+          },
+          {
+            "type": "click",
+            "target": "Cart"
+          },
+          {
+            "type": "click",
+            "target": "Checkout"
+          },
+          {
+            "type": "click",
+            "target": "Continue"
+          },
+          {
+            "type": "fill",
+            "target": "firstName",
+            "value": "Test"
+          },
+          {
+            "type": "fill",
+            "target": "lastName",
+            "value": "User"
+          },
+          {
+            "type": "fill",
+            "target": "postalCode",
+            "value": "00000"
+          },
+          {
+            "type": "click",
+            "target": "Continue"
+          },
+          {
+            "type": "click",
+            "target": "Finish"
+          },
+          {
+            "type": "assertUrl",
+            "url": "https://www.saucedemo.com/checkout-complete.html"
+          }
+        ]
+      }
+    ],
+    "execution": "review-only",
+    "executionReason": "Transactional replay is not supported by the guarded runner. Cart mutations, checkout forms and test-state reset require a dedicated executor."
+  },
+  "planCoverage": {
+    "count": 4,
+    "cart": true,
+    "checkout": true,
+    "completion": true,
+    "execution": "review-only"
+  },
+  "lifePlannerAuthenticated": {
+    "status": "not-live-verified",
+    "reason": "No dedicated test account for this separate origin was supplied. Existing authenticated navigation regressions cover the unchanged path."
+  }
+}
