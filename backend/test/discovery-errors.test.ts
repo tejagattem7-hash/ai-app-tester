@@ -47,7 +47,9 @@ describe("discovery error presentation", () => {
     try {
       await exploreApplication("https://example.com/path")
       await exploreApplication("https://different.example/path", false, undefined, undefined, undefined, true)
-      assert.deepEqual(requests, [{ url: "https://example.com/path", authenticated: false }, { url: "https://different.example/path", authenticated: false, transactionalExploration: true }])
+      await exploreApplication("https://third.example/path", false, undefined, undefined, undefined, false, true)
+      assert.deepEqual(requests, [{ url: "https://example.com/path", authenticated: false }, { url: "https://different.example/path", authenticated: false, transactionalExploration: true },
+        { url: "https://third.example/path", authenticated: false, thoroughExploration: true }])
     } finally { fetch.mock.restore() }
   })
   for (const [code, message] of cases) it(`maps ${code} without displaying server details`, async () => {
@@ -75,11 +77,15 @@ describe("discovery error presentation", () => {
 
   it("uses a fixed fallback for unknown codes, malformed responses and network errors", async () => {
     const message = "We couldn’t complete authenticated exploration. Please try again."
-    for (const body of [{ code: "future-code" }, { code: "__proto__" }, { code: { secret: "fixture-password" } }, null, "Playwright fixture-password"]) {
-      const fetch = mock.method(globalThis, "fetch", async () => new Response(typeof body === "string" ? body : JSON.stringify(body), { status: 500 }))
+    for (const body of [{ code: "future-code" }, { code: "__proto__" }, { code: { secret: "fixture-password" } }, null]) {
+      const fetch = mock.method(globalThis, "fetch", async () => new Response(JSON.stringify(body), { status: 500 }))
       try { await assert.rejects(() => exploreApplication("https://example.com", true), { message }) }
       finally { fetch.mock.restore() }
     }
+    const malformed = mock.method(globalThis, "fetch", async () => new Response("Playwright fixture-password", { status: 500 }))
+    try { await assert.rejects(() => exploreApplication("https://example.com", true), {
+      message: "The API returned an unexpected response. Check that the backend server is running and try again.",
+    }) } finally { malformed.mock.restore() }
     const fetch = mock.method(globalThis, "fetch", async () => { throw new Error("fixture-password") })
     try { await assert.rejects(() => exploreApplication("https://example.com", true), { message }) }
     finally { fetch.mock.restore() }

@@ -1,6 +1,6 @@
 import { ArrowRight, Eye, EyeOff, Globe2, LoaderCircle, ShieldCheck, Sparkles } from "lucide-react"
 import { useEffect, useRef, useState, type FormEvent } from "react"
-import { useNavigate } from "react-router-dom"
+import { useLocation, useNavigate } from "react-router-dom"
 import { PageHeader } from "@/components/PageHeader"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
@@ -12,12 +12,16 @@ import type { TestPlanNavigationState } from "@/types/planning"
 
 export function NewTestPage() {
   const navigate = useNavigate()
-  const [url, setUrl] = useState(targetUrl)
+  const location = useLocation()
+  const fromPlan = location.state as { url?: unknown; readOnly?: unknown } | null
+  const startingReadOnly = fromPlan?.readOnly === true
+  const [url, setUrl] = useState(typeof fromPlan?.url === "string" ? fromPlan.url : targetUrl)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [explore, setExplore] = useState(false)
+  const [explore, setExplore] = useState(startingReadOnly)
   const [authenticated, setAuthenticated] = useState(false)
   const [transactionalExploration, setTransactionalExploration] = useState(false)
+  const [thoroughExploration, setThoroughExploration] = useState(startingReadOnly)
   const [transactionalModeEnabled, setTransactionalModeEnabled] = useState<boolean | null>(null)
   const [capabilityError, setCapabilityError] = useState(false)
   const [username, setUsername] = useState("")
@@ -74,13 +78,15 @@ export function NewTestPage() {
 
     try {
       const credentials = authenticated && authMode === "manual" ? { username: username.trim(), password } : undefined
-      const discovery = await (explore ? exploreApplication(submittedUrl, authenticated, credentials, (id) => { operation.id = id }, operation.controller.signal, transactionalExploration) : discoverPage(submittedUrl))
+      const discovery = await (explore ? exploreApplication(submittedUrl, authenticated, credentials, (id) => { operation.id = id }, operation.controller.signal, transactionalExploration, thoroughExploration) : discoverPage(submittedUrl))
       clearCredentials()
       const plan = await createTestPlan(discovery, operation.id, operation.controller.signal)
       if (operation.controller.signal.aborted) return
       if (operation.id) retainAuthWorkflow(operation.id, plan)
       pending.current = undefined
-      const state: TestPlanNavigationState = { url: submittedUrl, plan }
+      const state: TestPlanNavigationState = { url: submittedUrl, plan,
+        ...("pages" in discovery ? { explorationSummary: { observedStates: discovery.pages.length,
+          maxStates: discovery.limits.maxPages, completionReason: discovery.completionReason } } : {}) }
       navigate("/plan", { state })
     } catch (caughtError) {
       if (operation.id) void cancelAuthWorkflow(operation.id)
@@ -111,21 +117,26 @@ export function NewTestPage() {
             <label className="mt-4 flex items-center gap-2 text-sm text-slate-600">
               <input type="checkbox" checked={explore} onChange={(event) => {
                 setExplore(event.target.checked)
-                if (!event.target.checked) { setAuthenticated(false); setTransactionalExploration(false); setAuthMode("manual"); clearCredentials(); setError(null) }
+                if (!event.target.checked) { setAuthenticated(false); setTransactionalExploration(false); setThoroughExploration(false); setAuthMode("manual"); clearCredentials(); setError(null) }
               }} disabled={isLoading} aria-describedby="explore-help" />
               Explore additional pages automatically
             </label>
-            <p id="explore-help" className="mt-2 text-xs text-slate-500">{transactionalExploration ? "May inspect up to 10 workflow states and take a minute." : "May inspect up to 5 related pages and take a minute."}</p>
+            <p id="explore-help" className="mt-2 text-xs text-slate-500">{transactionalExploration ? "May inspect up to 10 workflow states and take a minute." : thoroughExploration ? "May inspect up to 20 pages on this website, 5 levels deep, for up to 3 minutes." : "May inspect up to 5 related pages and take a minute."}</p>
             {explore && <>
               <label className="mt-3 flex items-center gap-2 text-sm text-slate-600">
-                <input type="checkbox" checked={transactionalExploration} onChange={(event) => { setTransactionalExploration(event.target.checked); setError(null) }} disabled={isLoading || transactionalModeEnabled !== true} aria-describedby="transactional-help" />
+                <input type="checkbox" checked={thoroughExploration} onChange={(event) => { setThoroughExploration(event.target.checked); if (event.target.checked) setTransactionalExploration(false); setError(null) }} disabled={isLoading} aria-describedby="thorough-help" />
+                Explore more pages (read-only)
+              </label>
+              <p id="thorough-help" className="mt-2 text-xs text-slate-500">Follows safe links and navigation controls on the submitted origin. Stops at its page, depth, interaction or time limit; pages behind forms or other origins may remain unseen.</p>
+              <label className="mt-3 flex items-center gap-2 text-sm text-slate-600">
+                <input type="checkbox" checked={transactionalExploration} onChange={(event) => { setTransactionalExploration(event.target.checked); if (event.target.checked) setThoroughExploration(false); setError(null) }} disabled={isLoading || transactionalModeEnabled !== true} aria-describedby="transactional-help" />
                 Explore transactional test workflows
               </label>
               <p id="transactional-help" className="mt-2 text-xs text-slate-500">{transactionalModeEnabled === false
                 ? "Transactional exploration is disabled on this server."
                 : capabilityError ? "Transactional exploration availability could not be checked. Reload to try again."
                 : transactionalModeEnabled === null ? "Checking transactional exploration availability..."
-                : "Use only test/demo applications where you permit state changes. This opt-in applies to the submitted application's origin for this exploration only. May complete a test checkout with placeholder data. Explores up to 10 states in one minute; generated plans are review-only."}</p>
+                : "May change data on the test site, including cart and demo checkout actions. Select only for sites where you permit repeated changes. Explores up to 10 workflow states; the resulting plan can run once while its temporary workflow is active."}</p>
               <label className="mt-3 flex items-center gap-2 text-sm text-slate-600">
                 <input type="checkbox" checked={authenticated} onChange={(event) => {
                   setAuthenticated(event.target.checked)

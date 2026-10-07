@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto"
 import type { Page } from "playwright"
 import { AuthenticationError, getTestCredentials, MAX_AUTH_ENTRY_DEPTH, MAX_AUTH_ENTRY_STATES, type LoginCredentials } from "../config/authentication.js"
-import { EXPLORATION_ACTION_TIMEOUT_MS, EXPLORATION_TIMEOUT_MS, MAX_EXPLORATION_DEPTH, MAX_EXPLORATION_INTERACTIONS, MAX_EXPLORATION_PAGES } from "../config/exploration.js"
+import { EXPLORATION_ACTION_TIMEOUT_MS, EXPLORATION_TIMEOUT_MS, MAX_EXPLORATION_DEPTH, MAX_EXPLORATION_INTERACTIONS, MAX_EXPLORATION_PAGES, MAX_THOROUGH_DEPTH, MAX_THOROUGH_INTERACTIONS, MAX_THOROUGH_PAGES, THOROUGH_TIMEOUT_MS } from "../config/exploration.js"
 import { explorationResultSchema, type ExploredPage, type ExplorationResult, type NavigationControl } from "../schemas/exploration-result.schema.js"
 import { isExternalAuthenticationControl, isSafeAuthenticatedNavigationControl, isSafeNavigationControl } from "../utils/exploration-safety.js"
 import { SecretRedactor } from "../utils/secret-redaction.js"
@@ -147,24 +147,30 @@ async function restoreState(session: DiscoverySession, state: QueuedState, befor
   }
 }
 
-function emptyExploration(rawUrl: string, transactional = false): ExplorationResult {
+function emptyExploration(rawUrl: string, transactional = false, thorough = false): ExplorationResult {
   return {
     startUrl: rawUrl,
     pages: [],
     transitions: [],
     limits: transactional
       ? { maxPages: MAX_TRANSACTIONAL_STATES, maxDepth: MAX_TRANSACTIONAL_DEPTH, timeoutMs: TRANSACTIONAL_TIMEOUT_MS, maxInteractions: MAX_TRANSACTIONAL_INTERACTIONS }
-      : { maxPages: MAX_EXPLORATION_PAGES, maxDepth: MAX_EXPLORATION_DEPTH, timeoutMs: EXPLORATION_TIMEOUT_MS, maxInteractions: MAX_EXPLORATION_INTERACTIONS },
-    ...(transactional ? { transactionalExploration: { enabled: true as const, execution: "review-only" as const } } : {}),
+      : thorough
+        ? { maxPages: MAX_THOROUGH_PAGES, maxDepth: MAX_THOROUGH_DEPTH, timeoutMs: THOROUGH_TIMEOUT_MS, maxInteractions: MAX_THOROUGH_INTERACTIONS }
+        : { maxPages: MAX_EXPLORATION_PAGES, maxDepth: MAX_EXPLORATION_DEPTH, timeoutMs: EXPLORATION_TIMEOUT_MS, maxInteractions: MAX_EXPLORATION_INTERACTIONS },
+    ...(transactional ? { transactionalExploration: { enabled: true as const, execution: "guarded" as const } } : {}),
+    ...(thorough ? { thoroughExploration: { enabled: true as const } } : {}),
     completionReason: "complete",
     warnings: [],
   }
 }
 
 export async function exploreApplication(rawUrl: string, dependencies?: DiscoveryDependencies, options: {
-  authenticated?: boolean; credentials?: LoginCredentials; signal?: AbortSignal; transactionalExploration?: boolean
+  authenticated?: boolean; credentials?: LoginCredentials; signal?: AbortSignal; transactionalExploration?: boolean; thoroughExploration?: boolean
   inspectAuthenticated?: (session: DiscoverySession, redactor: SecretRedactor, beforeInteraction: () => void) => Promise<void>
+  inspectTransactional?: (session: DiscoverySession, beforeInteraction: () => void,
+    capture: () => Promise<Omit<ExploredPage, "id" | "depth">>) => Promise<void>
 } = {}): Promise<ExplorationResult> {
+  if (options.transactionalExploration && options.thoroughExploration) throw new Error("Select only one exploration mode")
   if (options.transactionalExploration) assertTransactionalModeEnabled()
   const transactional: TransactionalNetworkGuard | undefined = options.transactionalExploration ? { phase: "catalog" } : undefined
   const credentials = options.authenticated ? getTestCredentials(rawUrl, options.credentials) : undefined
@@ -173,11 +179,15 @@ export async function exploreApplication(rawUrl: string, dependencies?: Discover
     username: credentials.username, password: credentials.password, submissionActive: false,
     authenticated: false, loginRequestUsed: false, rejected: false, sessionExpired: false, redirectedToLogin: false,
   } : undefined
-  let result = emptyExploration(rawUrl)
+  const thorough = !!options.thoroughExploration
+  const readOnlyLimits = thorough
+    ? { maxPages: MAX_THOROUGH_PAGES, maxDepth: MAX_THOROUGH_DEPTH, timeoutMs: THOROUGH_TIMEOUT_MS, maxInteractions: MAX_THOROUGH_INTERACTIONS }
+    : { maxPages: MAX_EXPLORATION_PAGES, maxDepth: MAX_EXPLORATION_DEPTH, timeoutMs: EXPLORATION_TIMEOUT_MS, maxInteractions: MAX_EXPLORATION_INTERACTIONS }
+  let result = emptyExploration(rawUrl, !!transactional, thorough)
   const warn = (error: unknown) => {
     if (error instanceof DiscoveryBudgetError || error instanceof ExplorationInteractionLimitError) throw error
     if (error instanceof AuthenticationError) throw error
-    if (result.warnings.length < MAX_EXPLORATION_INTERACTIONS) {
+    if (result.warnings.length < (transactional ? MAX_TRANSACTIONAL_INTERACTIONS : readOnlyLimits.maxInteractions)) {
       result.warnings.push((credentials ? "A navigation control could not be explored safely."
         : error instanceof Error ? error.message : "Unable to explore control").slice(0, 500))
     }
@@ -187,7 +197,7 @@ export async function exploreApplication(rawUrl: string, dependencies?: Discover
       let interactions = 0
       let attempts = 0
       const beforeClick = () => {
-        if (interactions >= (transactional ? MAX_TRANSACTIONAL_INTERACTIONS : MAX_EXPLORATION_INTERACTIONS)) throw new ExplorationInteractionLimitError()
+        if (interactions >= (transactional ? MAX_TRANSACTIONAL_INTERACTIONS : readOnlyLimits.maxInteractions)) throw new ExplorationInteractionLimitError()
         interactions += 1
       }
       const capture = async () => {
@@ -238,13 +248,13 @@ export async function exploreApplication(rawUrl: string, dependencies?: Discover
             }
           }
           const candidates = await safeCandidates(session.page, session.initialUrl.origin, guard?.authenticated)
-          if (state.metadata.depth >= (entrySearch ? MAX_AUTH_ENTRY_DEPTH : MAX_EXPLORATION_DEPTH)) {
+          if (state.metadata.depth >= (entrySearch ? MAX_AUTH_ENTRY_DEPTH : readOnlyLimits.maxDepth)) {
             depthLimited ||= candidates.length > 0
             continue
           }
 
           for (const candidate of candidates) {
-            if (attempts >= MAX_EXPLORATION_INTERACTIONS) {
+            if (attempts >= (entrySearch ? MAX_EXPLORATION_INTERACTIONS : readOnlyLimits.maxInteractions)) {
               result.completionReason = "interaction-limit"
               return false
             }
@@ -278,7 +288,7 @@ export async function exploreApplication(rawUrl: string, dependencies?: Discover
                   return true
                 }
               }
-              if (result.pages.length >= (entrySearch ? MAX_AUTH_ENTRY_STATES : MAX_EXPLORATION_PAGES)) {
+              if (result.pages.length >= (entrySearch ? MAX_AUTH_ENTRY_STATES : readOnlyLimits.maxPages)) {
                 result.completionReason = "page-limit"
                 return false
               }
@@ -363,7 +373,8 @@ export async function exploreApplication(rawUrl: string, dependencies?: Discover
             }
             result.transitions.push({ fromStateId: state.id, toStateId: targetId,
               control: redactor ? redactor.sanitize(candidate.control) : candidate.control,
-              interaction: { intent: candidate.intent, fills: validation ? [] : candidate.fills, ...(validation ? { validationAttempt: true as const } : {}) } })
+              interaction: { intent: candidate.intent, controlIndex: candidate.index, fills: validation ? [] : candidate.fills,
+                ...(validation ? { validationAttempt: true as const } : {}) } })
             state = result.pages.find((item) => item.id === targetId)!
             if (result.pages.length >= MAX_TRANSACTIONAL_STATES) { result.completionReason = "page-limit"; break }
           } catch (error) {
@@ -385,9 +396,12 @@ export async function exploreApplication(rawUrl: string, dependencies?: Discover
         const protectedUrl = session.page.url()
         if (new URL(protectedUrl).search || new URL(protectedUrl).hash) throw new AuthenticationError("authentication-unconfirmed")
         if (transactional) session.authorizeTransactional!()
-        result = emptyExploration(protectedUrl, !!transactional)
+        result = emptyExploration(protectedUrl, !!transactional, thorough)
         result.authentication = { status: "authenticated", execution: "discovery-only" }
-        if (options.inspectAuthenticated) {
+        if (options.inspectTransactional) {
+          result.pages.push({ ...await capture(), id: "state-1", depth: 0 })
+          await options.inspectTransactional(session, beforeClick, capture)
+        } else if (options.inspectAuthenticated) {
           result.pages.push({ ...await capture(), id: "state-1", depth: 0 })
           await options.inspectAuthenticated(session, redactor!, beforeClick)
         } else if (transactional) await walkTransactional(protectedUrl)
@@ -395,11 +409,15 @@ export async function exploreApplication(rawUrl: string, dependencies?: Discover
       } else if (transactional) {
         session.authorizeTransactional!()
         result = emptyExploration(session.initialUrl.href, true)
-        await walkTransactional(session.initialUrl.href)
+        if (options.inspectTransactional) {
+          result.pages.push({ ...await capture(), id: "state-1", depth: 0 })
+          await options.inspectTransactional(session, beforeClick, capture)
+        }
+        else await walkTransactional(session.initialUrl.href)
       } else await walk(session.initialUrl.href)
-    }, { sameOriginOnly: true, timeoutMs: transactional ? TRANSACTIONAL_TIMEOUT_MS : EXPLORATION_TIMEOUT_MS, authentication: guard, transactional, signal: options.signal }, dependencies)
+    }, { sameOriginOnly: true, timeoutMs: transactional ? TRANSACTIONAL_TIMEOUT_MS : readOnlyLimits.timeoutMs, authentication: guard, transactional, signal: options.signal }, dependencies)
   } catch (error) {
-    if (options.inspectAuthenticated || options.signal?.aborted) throw error
+    if (options.inspectAuthenticated || options.inspectTransactional || options.signal?.aborted) throw error
     // Return useful partial observations at the deadline, but never invent an
     // initial state if the application did not become discoverable in time.
     if (error instanceof PublicUrlError || error instanceof DiscoveryCapacityError) throw error

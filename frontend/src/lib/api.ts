@@ -26,15 +26,20 @@ async function postJson<T>(path: string, body: unknown, errorMessage?: (code: un
 
   if (!response.ok) {
     let message = errorMessage?.(undefined) ?? `Request failed (${response.status})`
+    let hasJsonError = false
     try {
       const error = await response.json() as ApiErrorBody
+      hasJsonError = true
       if (errorMessage) message = errorMessage(error?.code)
       else {
         const details = Array.isArray(error.details) ? error.details.join(", ") : error.details
         message = [error.error, details].filter(Boolean).join(": ") || message
       }
     } catch {
-      // Keep the status-based message when the server did not return JSON.
+      // The development proxy can return a non-JSON error when the API is down.
+    }
+    if (!hasJsonError && response.status >= 500) {
+      message = "The API returned an unexpected response. Check that the backend server is running and try again."
     }
     throw new Error(message)
   }
@@ -60,8 +65,8 @@ export async function getExplorationCapabilities(signal?: AbortSignal): Promise<
   return { transactionalModeEnabled: body.transactionalModeEnabled }
 }
 
-export function exploreApplication(url: string, authenticated = false, credentials?: { username: string; password: string }, onWorkflow?: (id: string) => void, signal?: AbortSignal, transactionalExploration = false): Promise<ExplorationResult> {
-  return postJson<ExplorationResult>("/api/explore", { url, authenticated, ...(transactionalExploration ? { transactionalExploration: true } : {}), ...(authenticated ? credentials : undefined) },
+export function exploreApplication(url: string, authenticated = false, credentials?: { username: string; password: string }, onWorkflow?: (id: string) => void, signal?: AbortSignal, transactionalExploration = false, thoroughExploration = false): Promise<ExplorationResult> {
+  return postJson<ExplorationResult>("/api/explore", { url, authenticated, ...(transactionalExploration ? { transactionalExploration: true } : {}), ...(thoroughExploration ? { thoroughExploration: true } : {}), ...(authenticated ? credentials : undefined) },
     (code) => discoveryErrorMessage(code, authenticated, credentials ? "manual" : "configured"), { onWorkflow, signal })
 }
 
@@ -78,9 +83,9 @@ function workflowErrorMessage(code: unknown): string {
   if (code === "llm-not-configured") return "AI test planning is not configured. Ask the app owner to check the API key and model settings."
   if (code === "llm-provider-failed") return "The AI provider could not generate a test plan. Please try again later."
   if (code === "llm-plan-invalid") return "The AI plan did not match the observed application. Start a new test and try again."
-  if (typeof code === "string" && code.startsWith("workflow-")) return "This authenticated workflow is unavailable or has expired. Start a new test and sign in again."
+  if (typeof code === "string" && code.startsWith("workflow-")) return "This test workflow is unavailable or has expired. Start a new test and try again."
   if (code === "authentication-rejected" || code === "authentication-cross-origin-redirect" || code === "session-expired") return discoveryErrorMessage(code, true)
-  return "We couldn’t complete authenticated testing. Start a new test and try again."
+  return "We couldn’t complete this test workflow. Start a new test and try again."
 }
 
 export async function cancelAuthWorkflow(id: string): Promise<void> {

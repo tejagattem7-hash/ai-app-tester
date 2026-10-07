@@ -69,7 +69,7 @@ export const testPlanSchema = z.object({
 
 // Execution context is added by deterministic backend code, never by the LLM.
 export const testPlanWithContextSchema = testPlanSchema.extend({
-  execution: z.enum(["discovery-only", "review-only"]).optional(),
+  execution: z.enum(["discovery-only", "review-only", "transactional"]).optional(),
   executionReason: z.string().min(1).max(500).optional(),
 }).strict()
 export type TestPlan = z.infer<typeof testPlanWithContextSchema>

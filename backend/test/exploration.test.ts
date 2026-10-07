@@ -3,10 +3,12 @@ import { createServer, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
 import { after, before, beforeEach, describe, it } from "node:test"
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright"
-import { MAX_EXPLORATION_DEPTH, MAX_EXPLORATION_INTERACTIONS, MAX_EXPLORATION_PAGES } from "../src/config/exploration.js"
+import { MAX_EXPLORATION_DEPTH, MAX_EXPLORATION_INTERACTIONS, MAX_EXPLORATION_PAGES, MAX_THOROUGH_DEPTH, MAX_THOROUGH_INTERACTIONS, MAX_THOROUGH_PAGES, THOROUGH_TIMEOUT_MS } from "../src/config/exploration.js"
 import { explorationResultSchema } from "../src/schemas/exploration-result.schema.js"
 import { DiscoveryBudgetError, DiscoveryNavigationError, withDiscoverySession, type DiscoveryDependencies } from "../src/services/discovery.service.js"
 import { exploreApplication, stateFingerprint } from "../src/services/exploration.service.js"
+import { createTestPlan } from "../src/services/test-planning.service.js"
+import type { TestAction } from "../src/schemas/test-plan.schema.js"
 import { isSafeNavigationControl } from "../src/utils/exploration-safety.js"
 
 let server: Server
@@ -99,6 +101,31 @@ describe("controlled application exploration", () => {
     assert.equal(result.pages[1]?.inputs[0]?.required, true)
     assert.deepEqual(result.transitions, [{ fromStateId: "state-1", toStateId: "state-2", control: { kind: "link", text: "Learn More", href: `${baseUrl}/details` } }])
     assert.ok(fixture.validated.includes(`${baseUrl}/details`))
+    fixture.assertClosed()
+  })
+
+  it("visits deeper read-only pages and passes every observed page to planning", async () => {
+    for (let depth = 0; depth <= MAX_THOROUGH_DEPTH; depth += 1) {
+      documents[depth ? `/level-${depth}` : "/"] = `<h1>Level ${depth}</h1>${depth < MAX_THOROUGH_DEPTH ? `<a href="/level-${depth + 1}">Next</a>` : ""}`
+    }
+    const fixture = fixtureDependencies()
+    const result = await exploreApplication(baseUrl, fixture.dependencies, { thoroughExploration: true })
+    assert.equal(explorationResultSchema.safeParse(result).success, true)
+    assert.deepEqual(result.limits, { maxPages: MAX_THOROUGH_PAGES, maxDepth: MAX_THOROUGH_DEPTH,
+      timeoutMs: THOROUGH_TIMEOUT_MS, maxInteractions: MAX_THOROUGH_INTERACTIONS })
+    assert.equal(result.pages.length, MAX_THOROUGH_DEPTH + 1)
+    assert.equal(result.completionReason, "complete")
+    assert.equal(result.pages.at(-1)?.visibleText.headings[0]?.text, `Level ${MAX_THOROUGH_DEPTH}`)
+    const actions: TestAction[] = [{ type: "navigate", url: result.startUrl },
+      ...result.transitions.map((transition) => ({ type: "click" as const, target: transition.control.text })),
+      { type: "assertText", target: "page", text: `Level ${MAX_THOROUGH_DEPTH}` }]
+    const plan = await createTestPlan(result, { async generateTestPlan({ input }) {
+      assert.match(input, new RegExp(`Level ${MAX_THOROUGH_DEPTH}`))
+      return { pagePurpose: "Observed levels", tests: [{ id: "deep-page", title: "Reach deep page", category: "navigation",
+        reason: "Observed links", expectedOutcome: "Deep page is visible", actions }] }
+    } })
+    assert.equal(plan.tests[0]?.actions.at(-1)?.type, "assertText")
+    assert.equal(requests.some((request) => request.method !== "GET"), false)
     fixture.assertClosed()
   })
 

@@ -4,6 +4,7 @@ import type { AddressInfo } from "node:net"
 import { after, before, beforeEach, describe, it, mock } from "node:test"
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright"
 import { AuthenticationError, getTestCredentials } from "../src/config/authentication.js"
+import { MAX_THOROUGH_DEPTH, MAX_THOROUGH_INTERACTIONS, MAX_THOROUGH_PAGES, THOROUGH_TIMEOUT_MS } from "../src/config/exploration.js"
 import { exploreRequestSchema } from "../src/schemas/discover.schema.js"
 import { authenticationSignals, findLoginControls } from "../src/services/authentication.service.js"
 import type { DiscoveryDependencies } from "../src/services/discovery.service.js"
@@ -252,7 +253,7 @@ describe("optional authenticated exploration", () => {
   it("validates complete UI credential pairs without trimming passwords or exposing values", () => {
     const input = { url: baseUrl, authenticated: true }
     assert.deepEqual(exploreRequestSchema.parse({ ...input, username: ` ${USER} `, password: ` ${PASSWORD} ` }), {
-      ...input, transactionalExploration: false, username: USER, password: ` ${PASSWORD} `,
+      ...input, transactionalExploration: false, thoroughExploration: false, username: USER, password: ` ${PASSWORD} `,
     })
     for (const credentials of [
       { username: USER }, { password: PASSWORD }, { username: "", password: PASSWORD },
@@ -267,6 +268,18 @@ describe("optional authenticated exploration", () => {
         assert.equal(JSON.stringify(result.error.issues.map((issue) => issue.message)).includes(secret), false)
       }
     }
+  })
+
+  it("applies the wider read-only budget after UI-credential login without mutating data", async () => {
+    const result = await exploreApplication(baseUrl, dependencies, { authenticated: true,
+      credentials: { username: USER, password: PASSWORD }, thoroughExploration: true })
+    assert.deepEqual(result.thoroughExploration, { enabled: true })
+    assert.deepEqual(result.limits, { maxPages: MAX_THOROUGH_PAGES, maxDepth: MAX_THOROUGH_DEPTH,
+      timeoutMs: THOROUGH_TIMEOUT_MS, maxInteractions: MAX_THOROUGH_INTERACTIONS })
+    assert.deepEqual(result.pages.map((page) => page.visibleText.headings[0]?.text), ["Dashboard", "Goals", "Calendar"])
+    assert.equal(requests.filter((request) => request.method === "POST").length, 1)
+    for (const secret of [USER, PASSWORD, TOKEN]) assert.equal(JSON.stringify(result).includes(secret), false)
+    assertClosed()
   })
 
   it("pins UI credentials to the submitted origin without requiring or using environment settings", () => {

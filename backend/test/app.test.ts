@@ -1,4 +1,6 @@
 import assert from "node:assert/strict"
+import { existsSync } from "node:fs"
+import { fileURLToPath } from "node:url"
 import type { Server } from "node:http"
 import type { AddressInfo } from "node:net"
 import { after, before, describe, it, mock } from "node:test"
@@ -19,10 +21,105 @@ after(() => new Promise<void>((resolve, reject) => {
 }))
 
 describe("API basics", () => {
+  it("serves the built UI and deep links beside the API", { skip: !existsSync(fileURLToPath(new URL("../../frontend/dist/index.html", import.meta.url))) }, async () => {
+    for (const path of ["/", "/plan", "/running", "/report"]) {
+      const response = await fetch(`${baseUrl}${path}`, { headers: { accept: "text/html" } })
+      assert.equal(response.status, 200)
+      assert.match(response.headers.get("content-type") ?? "", /text\/html/)
+      assert.match(await response.text(), /<div id="root"><\/div>/)
+    }
+    const missingApi = await fetch(`${baseUrl}/api/missing`, { headers: { accept: "text/html" } })
+    assert.equal(missingApi.status, 404)
+    assert.deepEqual(await missingApi.json(), { error: "Not found" })
+    const missingAsset = await fetch(`${baseUrl}/assets/missing.js`, { headers: { accept: "text/html" } })
+    assert.equal(missingAsset.status, 404)
+  })
+  it("offers both exploration choices and keeps state-changing consent separate", { skip: !existsSync(fileURLToPath(new URL("../../frontend/dist/index.html", import.meta.url))) }, async () => {
+    const original = process.env.TRANSACTIONAL_MODE_ENABLED
+    delete process.env.TRANSACTIONAL_MODE_ENABLED
+    const browser = await chromium.launch({ headless: true })
+    try {
+      const page = await browser.newPage()
+      await page.goto(baseUrl)
+      await page.getByRole("checkbox", { name: "Explore additional pages automatically" }).check()
+      const thorough = page.getByRole("checkbox", { name: "Explore more pages (read-only)" })
+      const transactional = page.getByRole("checkbox", { name: "Explore transactional test workflows" })
+      await page.waitForFunction(() => {
+        const option = document.querySelector('input[aria-describedby="transactional-help"]')
+        return option instanceof HTMLInputElement && !option.disabled
+      })
+      assert.equal(await thorough.isEnabled(), true)
+      assert.equal(await transactional.isEnabled(), true)
+      assert.equal(await transactional.isChecked(), false)
+      await thorough.check()
+      assert.equal(await transactional.isChecked(), false)
+      await transactional.check()
+      assert.equal(await thorough.isChecked(), false)
+      assert.equal(await transactional.isChecked(), true)
+    } finally {
+      await browser.close()
+      if (original === undefined) delete process.env.TRANSACTIONAL_MODE_ENABLED
+      else process.env.TRANSACTIONAL_MODE_ENABLED = original
+    }
+  })
+  it("enables transactional Run tests only while the matching workflow is held in memory", { skip: !existsSync(fileURLToPath(new URL("../../frontend/dist/index.html", import.meta.url))) }, async () => {
+    const browser = await chromium.launch({ headless: true })
+    try {
+      const page = await browser.newPage()
+      const url = "https://example.com/"
+      await page.route("**/api/explore", (route) => route.fulfill({ status: 200, contentType: "application/json",
+        headers: { "x-auth-workflow": "a".repeat(64) },
+        body: JSON.stringify({ startUrl: url, pages: [{ id: "state-1" }], limits: { maxPages: 10 }, completionReason: "complete" }) }))
+      await page.route("**/api/test-plans", (route) => route.fulfill({ status: 200, contentType: "application/json",
+        body: JSON.stringify({ pagePurpose: "Observed demo catalog", execution: "transactional", tests: [{ id: "catalog", title: "Catalog", category: "content",
+          reason: "Observed state", expectedOutcome: "Catalog is visible", actions: [{ type: "navigate", url }, { type: "assertUrl", url }] }] }) }))
+      await page.goto(baseUrl)
+      await page.getByLabel("Public application URL").fill(url)
+      await page.getByRole("checkbox", { name: "Explore additional pages automatically" }).check()
+      const transactional = page.getByRole("checkbox", { name: "Explore transactional test workflows" })
+      await transactional.waitFor({ state: "visible" })
+      await transactional.check()
+      await page.getByRole("button", { name: "Create test plan" }).click()
+      await page.getByRole("button", { name: "Run transactional tests" }).waitFor()
+      assert.equal(await page.getByRole("button", { name: "Run transactional tests" }).isEnabled(), true)
+      await page.reload()
+      assert.equal(await page.getByRole("button", { name: "Run transactional tests" }).isEnabled(), false)
+    } finally { await browser.close() }
+  })
+  it("sends the held workflow with a transactional run and reaches the report", { skip: !existsSync(fileURLToPath(new URL("../../frontend/dist/index.html", import.meta.url))) }, async () => {
+    const browser = await chromium.launch({ headless: true })
+    try {
+      const page = await browser.newPage()
+      const url = "https://example.com/"
+      const id = "b".repeat(64)
+      let runWorkflowHeader: string | undefined
+      await page.route("**/api/explore", (route) => route.fulfill({ status: 200, contentType: "application/json",
+        headers: { "x-auth-workflow": id },
+        body: JSON.stringify({ startUrl: url, pages: [{ id: "state-1" }], limits: { maxPages: 10 }, completionReason: "complete" }) }))
+      await page.route("**/api/test-plans", (route) => route.fulfill({ status: 200, contentType: "application/json",
+        body: JSON.stringify({ pagePurpose: "Observed catalog", execution: "transactional", tests: [{ id: "catalog", title: "Catalog", category: "content",
+          reason: "Observed state", expectedOutcome: "Catalog is visible", actions: [{ type: "navigate", url }, { type: "assertUrl", url }] }] }) }))
+      await page.route("**/api/test-runs", (route) => {
+        runWorkflowHeader = route.request().headers()["x-auth-workflow"]
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ url, results: [{ id: "catalog", title: "Catalog", status: "passed",
+          actions: [{ type: "navigate", success: true, durationMs: 1 }, { type: "assertUrl", success: true, durationMs: 1 }], finalUrl: url, durationMs: 2 }] }) })
+      })
+      await page.route("**/api/evaluations", (route) => route.fulfill({ status: 200, contentType: "application/json",
+        body: JSON.stringify({ summary: { total: 1, passed: 1, failed: 0 }, findings: [] }) }))
+      await page.goto(baseUrl)
+      await page.getByLabel("Public application URL").fill(url)
+      await page.getByRole("checkbox", { name: "Explore additional pages automatically" }).check()
+      await page.getByRole("checkbox", { name: "Explore transactional test workflows" }).check()
+      await page.getByRole("button", { name: "Create test plan" }).click()
+      await page.getByRole("button", { name: "Run transactional tests" }).click()
+      await page.waitForURL("**/report")
+      assert.equal(runWorkflowHeader, id)
+    } finally { await browser.close() }
+  })
   it("reports the global transactional capability without origins or configuration details", async () => {
     const original = process.env.TRANSACTIONAL_MODE_ENABLED
     try {
-      for (const [value, enabled] of [[undefined, false], ["false", false], ["TRUE", false], ["true", true]] as const) {
+      for (const [value, enabled] of [[undefined, true], ["false", false], ["TRUE", false], ["true", true]] as const) {
         if (value === undefined) delete process.env.TRANSACTIONAL_MODE_ENABLED
         else process.env.TRANSACTIONAL_MODE_ENABLED = value
         const response = await fetch(`${baseUrl}/api/explore/capabilities`)
@@ -37,7 +134,7 @@ describe("API basics", () => {
   })
   it("rejects opted-in requests with a controlled disabled error before credentials or browser startup", async () => {
     const original = process.env.TRANSACTIONAL_MODE_ENABLED
-    delete process.env.TRANSACTIONAL_MODE_ENABLED
+    process.env.TRANSACTIONAL_MODE_ENABLED = "false"
     const launch = mock.method(chromium, "launch", async () => { throw new Error("Unexpected browser launch") })
     try {
       for (const authenticated of [false, true]) {
@@ -106,7 +203,8 @@ describe("API basics", () => {
   })
 
   it("rejects private exploration URLs and caller-supplied limit overrides", async () => {
-    for (const body of [{ url: "http://127.0.0.1" }, { url: "https://example.com", maxPages: 500 }]) {
+    for (const body of [{ url: "http://127.0.0.1" }, { url: "https://example.com", maxPages: 500 },
+      { url: "https://example.com", thoroughExploration: true, transactionalExploration: true }]) {
       const response = await fetch(`${baseUrl}/api/explore`, {
         method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
       })

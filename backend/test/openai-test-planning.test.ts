@@ -42,8 +42,8 @@ function structuredResponse(text = JSON.stringify(plan), status = "completed") {
   }), { headers: { "content-type": "application/json" } })
 }
 
-function apiFailure(status: number) {
-  return new Response(JSON.stringify({ error: { message: `Raw SDK detail containing ${apiKey}` } }), {
+function apiFailure(status: number, code?: string) {
+  return new Response(JSON.stringify({ error: { message: `Raw SDK detail containing ${apiKey}`, ...(code ? { code } : {}) } }), {
     status, headers: { "content-type": "application/json", "x-should-retry": "false" },
   })
 }
@@ -199,6 +199,18 @@ describe("official OpenAI test planning", () => {
       assert.deepEqual(logs, [])
     })
   }
+
+  it("classifies the SDK's exhausted-credit 429 without retaining its private error body", async () => {
+    apiHandler = async () => apiFailure(429, "credit_balance_exhausted")
+    await assert.rejects(() => getConfiguredTestPlanningProvider().generateTestPlan(prompt), (error: unknown) => {
+      assert.ok(error instanceof LlmProviderError)
+      assert.equal(error.code, "credit-balance-exhausted")
+      assert.equal(error.cause, undefined)
+      assert.equal(error.message.includes(apiKey), false)
+      return true
+    })
+    assert.deepEqual(logs, [])
+  })
 
   it("handles network failure safely after the SDK's bounded retries", async () => {
     apiHandler = async () => { throw new TypeError(`Network failure containing ${apiKey}`) }

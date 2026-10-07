@@ -19,6 +19,14 @@ const actionLabels: Record<TestAction["type"], string> = {
   assertUrl: "Assert URL",
 }
 
+const completionMessages: Record<NonNullable<TestPlanNavigationState["explorationSummary"]>["completionReason"], string> = {
+  complete: "No further supported navigation was found in the selected scope.",
+  "page-limit": "The page limit was reached; more pages may remain.",
+  "depth-limit": "The navigation depth limit was reached; deeper pages may remain.",
+  "time-limit": "The time limit was reached; more pages may remain.",
+  "interaction-limit": "The interaction limit was reached; more pages may remain.",
+}
+
 function describeAction(action: TestAction): string {
   switch (action.type) {
     case "navigate":
@@ -54,21 +62,31 @@ export function TestPlanPage() {
 
   const { plan, url } = state
   const authenticated = plan.execution === "discovery-only"
+  const transactional = plan.execution === "transactional"
   const reviewOnly = plan.execution === "review-only"
   const hasWorkflow = !!workflow && JSON.stringify(workflow.plan) === JSON.stringify(plan)
-  const executionBlocked = reviewOnly || (authenticated && !hasWorkflow)
+  const executionBlocked = reviewOnly || ((authenticated || transactional) && !hasWorkflow)
   const startRun = () => {
     if (isStarting || executionBlocked) return
     setIsStarting(true)
-    const runningState: RunningNavigationState = { url, plan }
+    const runningState: RunningNavigationState = { url, plan, explorationSummary: state.explorationSummary }
     navigate("/running", { state: runningState })
   }
   return (
     <div className="space-y-8">
-      <PageHeader eyebrow="AI test plan" title={`${plan.tests.length} generated tests are ready${executionBlocked ? " to review" : ""}.`} description={plan.pagePurpose} actions={<><Button variant="outline" onClick={() => navigate("/")}><ArrowLeft className="size-4" />Edit URL</Button><Button onClick={startRun} disabled={isStarting || executionBlocked}><Play className="size-4" />{isStarting ? "Starting..." : "Run tests"}</Button></>} />
+      <PageHeader eyebrow="AI test plan" title={`${plan.tests.length} generated tests are ready${executionBlocked ? " to review" : ""}.`} description={plan.pagePurpose} actions={<><Button variant="outline" onClick={() => navigate("/")}><ArrowLeft className="size-4" />Edit URL</Button><Button onClick={startRun} disabled={isStarting || executionBlocked}><Play className="size-4" />{isStarting ? "Starting..." : transactional ? "Run transactional tests" : "Run tests"}</Button></>} />
       {authenticated && <p role="status" className="rounded-lg bg-amber-50 px-5 py-4 text-sm text-amber-900">{hasWorkflow ? "Authenticated tests are limited to observed safe navigation and assertions. This temporary workflow expires after ten minutes and can run once." : "This authenticated plan has no active workflow. Start a new test and sign in again to run it."}</p>}
-      {reviewOnly && <p role="status" className="rounded-lg bg-amber-50 px-5 py-4 text-sm text-amber-900">{plan.executionReason ?? "Transactional plans are review-only. Safe transactional execution is not available yet."}</p>}
-      <div className="flex flex-wrap items-center gap-3 rounded-xl border border-slate-200 bg-white px-5 py-4 text-sm"><Badge variant="info">{reviewOnly ? "Review only" : authenticated ? hasWorkflow ? "Authenticated" : "Discovery only" : "Ready"}</Badge><span className="break-all font-medium text-slate-900">{url}</span><span className="text-slate-400">•</span><span className="text-slate-500">{plan.tests.length} generated tests</span></div>
+      {transactional && <p role="status" className="rounded-lg bg-amber-50 px-5 py-4 text-sm text-amber-900">{hasWorkflow
+        ? "Running these tests repeats the observed cart and checkout operations. Each scenario uses a fresh browser session, but the target application's server-side test data may persist. This workflow can run once and expires after ten minutes."
+        : "This transactional plan has no active run workflow. Start a new test to run its operations."}</p>}
+      {reviewOnly && <div role="status" className="flex flex-wrap items-center justify-between gap-4 rounded-lg bg-amber-50 px-5 py-4 text-sm text-amber-900">
+        <p>{plan.executionReason ?? "Transactional plans are review-only. Safe transactional execution is not available yet."} To run safe navigation tests, create a read-only plan. If this site requires login, enter the test account again on the next page.</p>
+        <Button variant="outline" onClick={() => navigate("/", { state: { url, readOnly: true } })}>Create read-only plan</Button>
+      </div>}
+      {state.explorationSummary && <p role="status" className="rounded-lg bg-indigo-50 px-5 py-4 text-sm text-indigo-900">
+        Explored {state.explorationSummary.observedStates} of up to {state.explorationSummary.maxStates} observable states. {completionMessages[state.explorationSummary.completionReason]}
+      </p>}
+      <div className="flex flex-wrap items-center gap-3 rounded-xl border border-slate-200 bg-white px-5 py-4 text-sm"><Badge variant="info">{reviewOnly ? "Review only" : transactional ? hasWorkflow ? "Transactional" : "Workflow expired" : authenticated ? hasWorkflow ? "Authenticated" : "Discovery only" : "Ready"}</Badge><span className="break-all font-medium text-slate-900">{url}</span><span className="text-slate-400">•</span><span className="text-slate-500">{plan.tests.length} generated tests</span></div>
       <div className="space-y-4">{plan.tests.map((scenario) => (
         <Card key={scenario.id}>
           <CardContent className="flex gap-4">

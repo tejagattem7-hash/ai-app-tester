@@ -57,13 +57,14 @@ export interface ExplorationResult {
     fromStateId: string
     toStateId: string
     control: { kind: "button" | "link"; text: string; href?: string }
-    interaction?: { intent: "add-to-cart" | "remove-from-cart" | "cart" | "checkout" | "continue" | "back" | "finish"; fills: { target: string; value: string }[]; validationAttempt?: true }
+    interaction?: { intent: "add-to-cart" | "remove-from-cart" | "cart" | "checkout" | "continue" | "back" | "finish"; controlIndex: number; fills: { target: string; value: string }[]; validationAttempt?: true }
   }[]
   limits: { maxPages: number; maxDepth: number; timeoutMs: number; maxInteractions: number }
   completionReason: "complete" | "page-limit" | "depth-limit" | "time-limit" | "interaction-limit"
   warnings: string[]
   authentication?: { status: "authenticated"; execution: "discovery-only" }
-  transactionalExploration?: { enabled: true; execution: "review-only" }
+  transactionalExploration?: { enabled: true; execution: "guarded" }
+  thoroughExploration?: { enabled: true }
 }
 
 export type TestAction =
@@ -87,7 +88,7 @@ export interface GeneratedTestScenario {
 }
 
 export interface TestPlan {
-  execution?: "discovery-only" | "review-only"
+  execution?: "discovery-only" | "review-only" | "transactional"
   executionReason?: string
   pagePurpose: string
   tests: GeneratedTestScenario[]
@@ -96,4 +97,5 @@ export interface TestPlan {
 export interface TestPlanNavigationState {
   url: string
   plan: TestPlan
+  explorationSummary?: { observedStates: number; maxStates: number; completionReason: ExplorationResult["completionReason"] }
 }

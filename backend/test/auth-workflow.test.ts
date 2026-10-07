@@ -22,6 +22,9 @@ const discovery = explorationResultSchema.parse({
 })
 const plan: TestPlan = { pagePurpose: "Dashboard", tests: [{ id: "dashboard", title: "Dashboard", category: "content", reason: "Observed", expectedOutcome: "Dashboard visible",
   actions: [{ type: "navigate", url }, { type: "assertText", target: "page", text: "Dashboard" }] }], execution: "discovery-only" }
+const transactionalDiscovery = explorationResultSchema.parse({ ...discovery, authentication: undefined,
+  transactionalExploration: { enabled: true, execution: "guarded" },
+  limits: { maxPages: 10, maxDepth: 8, timeoutMs: 60000, maxInteractions: 20 } })
 
 describe("temporary authenticated workflow lifecycle", () => {
   it("encrypts retained credentials with fresh nonces and preserves exact Unicode/password whitespace", async () => {
@@ -172,6 +175,58 @@ const post = (path: string, cookie: string, id: string, body: unknown = {}) => f
 })
 
 describe("workflow API ownership and planning", () => {
+  it("associates a public transactional plan with its browser owner without retaining credentials", async () => {
+    const a = await owner(); const b = await owner()
+    const workflow = authWorkflows.create(a.owner, url, undefined, transactionalDiscovery)
+    const provider = mock.method(OpenAiTestPlanningProvider.prototype, "generateTestPlan", async () => ({ pagePurpose: plan.pagePurpose, tests: plan.tests }))
+    try {
+      assert.equal(workflow.encryptedCredentials, undefined)
+      const response = await post("test-plans", a.cookie, workflow.id, transactionalDiscovery)
+      assert.equal(response.status, 200)
+      const generated = await response.json() as TestPlan
+      assert.equal(generated.execution, "transactional")
+      assert.equal(workflow.state, "ready")
+      assert.equal((await post("test-runs", b.cookie, workflow.id, { url, plan: generated })).status, 409)
+      assert.equal((await fetch(`${base}/api/test-runs`, { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ url, plan: generated }) })).status, 409)
+      assert.equal(authWorkflows.claim(workflow.id, a.owner, url, generated), workflow)
+      assert.throws(() => authWorkflows.claim(workflow.id, a.owner, url, generated), WorkflowError)
+    } finally { provider.mock.restore(); authWorkflows.remove(workflow.id) }
+  })
+  it("accepts HTTPS origins only through an explicitly trusted proxy and sets a Secure cookie", async () => {
+    const check = (request: express.Request, response: express.Response) => {
+      try { response.json({ owner: workflowOwner(request, response, true) }) }
+      catch { response.status(409).end() }
+    }
+    const proxied = express()
+    proxied.set("trust proxy", "loopback")
+    proxied.post("/check", check)
+    const proxyServer = proxied.listen(0, "127.0.0.1")
+    await new Promise<void>((resolve) => proxyServer.once("listening", resolve))
+    const proxyBase = `http://127.0.0.1:${(proxyServer.address() as AddressInfo).port}`
+    try {
+      const accepted = await fetch(`${proxyBase}/check`, { method: "POST", headers: {
+        origin: proxyBase.replace("http:", "https:"), "x-forwarded-proto": "https",
+      } })
+      assert.equal(accepted.status, 200)
+      assert.match(accepted.headers.get("set-cookie") ?? "", /; Secure(?:;|$)/i)
+      const rejected = await fetch(`${proxyBase}/check`, { method: "POST", headers: {
+        origin: "https://attacker.example", "x-forwarded-proto": "https",
+      } })
+      assert.equal(rejected.status, 409)
+    } finally { await new Promise<void>((resolve) => proxyServer.close(() => resolve())) }
+    const direct = express()
+    direct.post("/check", check)
+    const directServer = direct.listen(0, "127.0.0.1")
+    await new Promise<void>((resolve) => directServer.once("listening", resolve))
+    const directBase = `http://127.0.0.1:${(directServer.address() as AddressInfo).port}`
+    try {
+      const untrusted = await fetch(`${directBase}/check`, { method: "POST", headers: {
+        origin: directBase.replace("http:", "https:"), "x-forwarded-proto": "https",
+      } })
+      assert.equal(untrusted.status, 409)
+    } finally { await new Promise<void>((resolve) => directServer.close(() => resolve())) }
+  })
   it("returns safe errors and cleans up corrupted credentials before planning or browser startup", async () => {
     const a = await owner()
     const launch = mock.method(chromium, "launch", async () => { throw new Error("must not launch") })
@@ -269,9 +324,7 @@ describe("workflow API ownership and planning", () => {
     const a = await owner()
     const workflow = authWorkflows.create(a.owner, url, credentials, discovery)
     const provider = mock.method(OpenAiTestPlanningProvider.prototype, "generateTestPlan", async () => {
-      throw new LlmProviderError("private provider message", {
-        cause: Object.assign(new Error(credentials.password), { status: 429, code: "credit_balance_exhausted" }),
-      })
+      throw new LlmProviderError("private provider message", { code: "credit-balance-exhausted" })
     })
     try {
       const response = await post("test-plans", a.cookie, workflow.id, discovery)

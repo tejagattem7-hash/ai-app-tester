@@ -15,8 +15,11 @@ export class LlmConfigurationError extends Error {
 }
 
 export class LlmProviderError extends Error {
-  constructor(message: string, options?: ErrorOptions) {
+  constructor(message: string, options?: ErrorOptions & { code?: "credit-balance-exhausted" }) {
     super(message, options)
     this.name = "LlmProviderError"
+    this.code = options?.code
   }
+
+  readonly code?: "credit-balance-exhausted"
 }

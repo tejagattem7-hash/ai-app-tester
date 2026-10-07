@@ -29,7 +29,7 @@ export function TestRunningPage() {
       void (async () => {
         try {
           if (state.plan.execution === "review-only") throw new Error(state.plan.executionReason ?? "Transactional plans are review-only.")
-          if (state.plan.execution === "discovery-only" && !id) throw new Error("This authenticated workflow is unavailable. Start a new test and sign in again.")
+          if ((state.plan.execution === "discovery-only" || state.plan.execution === "transactional") && !id) throw new Error("This test workflow is unavailable. Start a new test and try again.")
           started = true
           const run = await runTests(state.url, state.plan, id, id ? controller.signal : undefined)
           completed = true
@@ -83,7 +83,7 @@ export function TestRunningPage() {
           <div><p className="font-semibold">{isEvaluating ? "Evaluating results" : "Running tests"}</p><p className="mt-1 text-sm text-slate-300">{isEvaluating ? "Execution is complete. Preparing the report." : "Each scenario runs independently in an isolated browser context."}</p></div>
         </CardContent>
       </Card>
-      {state.plan.execution === "discovery-only" && <Button variant="outline" onClick={() => { clearAuthWorkflow(); navigate("/") }}>Cancel test</Button>}
+      {(state.plan.execution === "discovery-only" || state.plan.execution === "transactional") && <Button variant="outline" onClick={() => { clearAuthWorkflow(); navigate("/") }}>Cancel test</Button>}
     </div>
   )
 }

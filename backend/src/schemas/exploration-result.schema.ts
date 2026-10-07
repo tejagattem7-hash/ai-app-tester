@@ -1,10 +1,11 @@
 import { z } from "zod"
-import { EXPLORATION_TIMEOUT_MS, MAX_EXPLORATION_DEPTH, MAX_EXPLORATION_INTERACTIONS, MAX_EXPLORATION_PAGES } from "../config/exploration.js"
+import { EXPLORATION_TIMEOUT_MS, MAX_EXPLORATION_DEPTH, MAX_EXPLORATION_INTERACTIONS, MAX_EXPLORATION_PAGES, MAX_THOROUGH_DEPTH, MAX_THOROUGH_INTERACTIONS, MAX_THOROUGH_PAGES, THOROUGH_TIMEOUT_MS } from "../config/exploration.js"
 import { discoveryResultSchema } from "./discovery-result.schema.js"
 import { MAX_TRANSACTIONAL_DEPTH, MAX_TRANSACTIONAL_INTERACTIONS, MAX_TRANSACTIONAL_STATES, TRANSACTIONAL_TIMEOUT_MS } from "../config/transactional.js"
 
 export const transactionalInteractionSchema = z.object({
   intent: z.enum(["add-to-cart", "remove-from-cart", "cart", "checkout", "continue", "back", "finish"]),
+  controlIndex: z.number().int().min(0).max(199),
   fills: z.array(z.object({ target: z.string().min(1).max(300), value: z.string().max(1000) }).strict()).max(10),
   validationAttempt: z.literal(true).optional(),
 }).strict()
@@ -23,22 +24,23 @@ export const exploredPageSchema = discoveryResultSchema.omit({ screenshot: true 
 
 export const explorationResultSchema = z.object({
   startUrl: z.string().url().max(2048),
-  pages: z.array(exploredPageSchema).min(1).max(MAX_TRANSACTIONAL_STATES),
+  pages: z.array(exploredPageSchema).min(1).max(MAX_THOROUGH_PAGES),
   transitions: z.array(z.object({
     fromStateId: z.string(),
     toStateId: z.string(),
     control: navigationControlSchema,
     interaction: transactionalInteractionSchema.optional(),
-  }).strict()).max(MAX_EXPLORATION_INTERACTIONS),
+  }).strict()).max(MAX_THOROUGH_INTERACTIONS),
   limits: z.object({
-    maxPages: z.union([z.literal(MAX_EXPLORATION_PAGES), z.literal(MAX_TRANSACTIONAL_STATES)]),
-    maxDepth: z.union([z.literal(MAX_EXPLORATION_DEPTH), z.literal(MAX_TRANSACTIONAL_DEPTH)]),
-    timeoutMs: z.literal(EXPLORATION_TIMEOUT_MS),
-    maxInteractions: z.literal(MAX_EXPLORATION_INTERACTIONS),
+    maxPages: z.union([z.literal(MAX_EXPLORATION_PAGES), z.literal(MAX_TRANSACTIONAL_STATES), z.literal(MAX_THOROUGH_PAGES)]),
+    maxDepth: z.union([z.literal(MAX_EXPLORATION_DEPTH), z.literal(MAX_TRANSACTIONAL_DEPTH), z.literal(MAX_THOROUGH_DEPTH)]),
+    timeoutMs: z.union([z.literal(EXPLORATION_TIMEOUT_MS), z.literal(THOROUGH_TIMEOUT_MS)]),
+    maxInteractions: z.union([z.literal(MAX_EXPLORATION_INTERACTIONS), z.literal(MAX_THOROUGH_INTERACTIONS)]),
   }).strict(),
   completionReason: z.enum(["complete", "page-limit", "depth-limit", "time-limit", "interaction-limit"]),
-  warnings: z.array(z.string().max(500)).max(MAX_EXPLORATION_INTERACTIONS),
-  transactionalExploration: z.object({ enabled: z.literal(true), execution: z.literal("review-only") }).strict().optional(),
+  warnings: z.array(z.string().max(500)).max(MAX_THOROUGH_INTERACTIONS),
+  transactionalExploration: z.object({ enabled: z.literal(true), execution: z.literal("guarded") }).strict().optional(),
+  thoroughExploration: z.object({ enabled: z.literal(true) }).strict().optional(),
   authentication: z.object({
     status: z.literal("authenticated"),
     execution: z.literal("discovery-only"),
@@ -47,9 +49,13 @@ export const explorationResultSchema = z.object({
   const transactional = !!result.transactionalExploration
   const expected = transactional
     ? { maxPages: MAX_TRANSACTIONAL_STATES, maxDepth: MAX_TRANSACTIONAL_DEPTH, timeoutMs: TRANSACTIONAL_TIMEOUT_MS, maxInteractions: MAX_TRANSACTIONAL_INTERACTIONS }
-    : { maxPages: MAX_EXPLORATION_PAGES, maxDepth: MAX_EXPLORATION_DEPTH, timeoutMs: EXPLORATION_TIMEOUT_MS, maxInteractions: MAX_EXPLORATION_INTERACTIONS }
+    : result.thoroughExploration
+      ? { maxPages: MAX_THOROUGH_PAGES, maxDepth: MAX_THOROUGH_DEPTH, timeoutMs: THOROUGH_TIMEOUT_MS, maxInteractions: MAX_THOROUGH_INTERACTIONS }
+      : { maxPages: MAX_EXPLORATION_PAGES, maxDepth: MAX_EXPLORATION_DEPTH, timeoutMs: EXPLORATION_TIMEOUT_MS, maxInteractions: MAX_EXPLORATION_INTERACTIONS }
   if (JSON.stringify(result.limits) !== JSON.stringify(expected) || result.pages.length > expected.maxPages
     || result.pages.some((page) => page.depth > expected.maxDepth)
+    || result.transitions.length > expected.maxInteractions || result.warnings.length > expected.maxInteractions
+    || (transactional && !!result.thoroughExploration)
     || result.transitions.some((edge) => transactional ? !edge.interaction : !!edge.interaction)) {
     context.addIssue({ code: "custom", message: "Exploration must use the server-owned limits and interactions for its selected mode" })
   }

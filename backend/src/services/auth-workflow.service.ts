@@ -40,14 +40,15 @@ export class AuthWorkflowStore {
   private readonly records = new Map<string, { workflow: AuthWorkflow; timer: ReturnType<typeof setTimeout> }>()
   constructor(private readonly ttlMs = 10 * 60_000, private readonly capacity = 32) {}
 
-  create(owner: string, entryUrl: string, credentials: LoginCredentials, discovery: ExplorationResult): AuthWorkflow {
+  create(owner: string, entryUrl: string, credentials: LoginCredentials | undefined, discovery: ExplorationResult): AuthWorkflow {
     if (this.records.size >= this.capacity) throw new WorkflowError("workflow-capacity")
     const origin = new URL(entryUrl).origin
-    if (!discovery.authentication || new URL(discovery.startUrl).origin !== origin) throw new WorkflowError()
+    if ((!discovery.authentication && !discovery.transactionalExploration)
+      || !!discovery.authentication !== !!credentials || new URL(discovery.startUrl).origin !== origin) throw new WorkflowError()
     const workflow: AuthWorkflow = { id: randomBytes(32).toString("hex"), owner, origin, entryUrl,
       expiresAt: Date.now() + this.ttlMs, discovery: structuredClone(discovery),
       state: "discovered", controller: new AbortController() }
-    workflow.encryptedCredentials = encryptCredentials(credentials, workflow)
+    if (credentials) workflow.encryptedCredentials = encryptCredentials(credentials, workflow)
     const timer = setTimeout(() => this.remove(workflow.id), this.ttlMs)
     timer.unref()
     this.records.set(workflow.id, { workflow, timer })
@@ -78,7 +79,8 @@ export class AuthWorkflowStore {
   claim(id: string, owner: string, url: string, plan: TestPlan): AuthWorkflow {
     const workflow = this.get(id, owner)
     if (workflow.state !== "ready") throw new WorkflowError("workflow-used")
-    if (workflow.discovery.transactionalExploration || workflow.plan?.execution === "review-only") throw new WorkflowError("workflow-review-only")
+    if (workflow.plan?.execution === "review-only"
+      || (!!workflow.discovery.transactionalExploration !== (workflow.plan?.execution === "transactional"))) throw new WorkflowError("workflow-review-only")
     if (new URL(url).origin !== workflow.origin || JSON.stringify(plan) !== JSON.stringify(workflow.plan)) throw new WorkflowError("workflow-mismatch")
     workflow.state = "running" // Atomic before any await: duplicate submissions cannot acquire it.
     return workflow

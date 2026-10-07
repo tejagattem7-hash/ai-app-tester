@@ -14,7 +14,7 @@ export default defineConfig({
   server: {
     proxy: {
       // Keep the browser-facing Host for the backend's workflow origin check.
-      "/api": { target: "http://localhost:3001", changeOrigin: false },
+      "/api": { target: `http://localhost:${process.env.PORT ?? "3001"}`, changeOrigin: false },
     },
   },
   build: {

@@ -1,4 +1,4 @@
-import type { TestAction, TestCategory, TestPlan } from "@/types/planning"
+import type { TestAction, TestCategory, TestPlanNavigationState } from "@/types/planning"
 
 export interface ActionExecutionResult {
   type: TestAction["type"]
@@ -49,10 +49,7 @@ export interface Evaluation {
   findings: Finding[]
 }
 
-export interface RunningNavigationState {
-  url: string
-  plan: TestPlan
-}
+export type RunningNavigationState = TestPlanNavigationState
 
 export interface ReportNavigationState extends RunningNavigationState {
   run: TestRun

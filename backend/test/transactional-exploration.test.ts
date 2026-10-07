@@ -11,9 +11,10 @@ import { explorationResultSchema, type ExplorationResult } from "../src/schemas/
 import type { TestAction, TestPlan } from "../src/schemas/test-plan.schema.js"
 import { exploreApplication } from "../src/services/exploration.service.js"
 import { DiscoveryBudgetError, withDiscoverySession, type DiscoveryDependencies } from "../src/services/discovery.service.js"
-import { createTestPlan, InvalidTestPlanError } from "../src/services/test-planning.service.js"
+import { createTestPlan } from "../src/services/test-planning.service.js"
 import { AuthenticatedExecutionUnavailableError, executeTestRun } from "../src/services/test-execution.service.js"
-import { AuthWorkflowStore, WorkflowError } from "../src/services/auth-workflow.service.js"
+import { AuthWorkflowStore } from "../src/services/auth-workflow.service.js"
+import { executeTransactionalRun } from "../src/services/transactional-execution.service.js"
 import { allowsTransactionalPost, allowsTransactionalRead, deterministicTestValue, transactionalIntent, type TransactionalNetworkGuard } from "../src/utils/transactional-safety.js"
 import { assertPublicHttpUrl, PublicUrlError } from "../src/utils/public-url.js"
 
@@ -112,18 +113,17 @@ describe("transactional safety policy", () => {
     assert.equal(exploreRequestSchema.safeParse({ url: origin, transactionalExploration: "true" }).success, false)
     assert.equal(discoverRequestSchema.safeParse({ url: origin, transactionalExploration: true }).success, false)
   })
-  it("requires the exact global capability value true before launching, even with a legacy allowlist", async () => {
+  it("enables the option by default but rejects explicit disablement and invalid settings", async () => {
     process.env.TEST_TRANSACTIONAL_ORIGINS = origin
-    for (const value of [undefined, "", "false", "TRUE", "1", "yes", " true "]) {
-      if (value === undefined) delete process.env.TRANSACTIONAL_MODE_ENABLED
-      else process.env.TRANSACTIONAL_MODE_ENABLED = value
+    for (const value of ["", "false", "TRUE", "1", "yes", " true "]) {
+      process.env.TRANSACTIONAL_MODE_ENABLED = value
       assert.equal(isTransactionalModeEnabled(), false)
       assert.throws(assertTransactionalModeEnabled, TransactionalExplorationError)
       await assert.rejects(explore, TransactionalExplorationError)
       assert.equal(browser, undefined)
     }
     delete process.env.TEST_TRANSACTIONAL_ORIGINS
-    process.env.TRANSACTIONAL_MODE_ENABLED = "true"
+    delete process.env.TRANSACTIONAL_MODE_ENABLED
     assert.equal(isTransactionalModeEnabled(), true)
     assert.doesNotThrow(assertTransactionalModeEnabled)
   })
@@ -253,7 +253,7 @@ describe("controlled transactional browser exploration", () => {
     assert.deepEqual(result.transitions.map((edge) => edge.interaction?.intent), ["add-to-cart", "cart", "checkout", "continue", "continue", "finish"])
     assert.equal(result.transitions[3]!.interaction!.validationAttempt, true)
     assert.deepEqual(result.transitions[4]!.interaction!.fills, [{ target: "First Name", value: "Test" }, { target: "Last Name", value: "User" }, { target: "Postal Code", value: "00000" }])
-    assert.equal(result.transactionalExploration?.execution, "review-only")
+    assert.equal(result.transactionalExploration?.execution, "guarded")
     for (const secret of [USER, PASSWORD, "synthetic-token"]) assert.equal(JSON.stringify(result).includes(secret), false)
     assert.equal(requests.some((request) => request.path === "/changed"), false)
     assert.equal(requests.filter((request) => request.path === "/login").length, 1)
@@ -347,7 +347,22 @@ describe("controlled transactional browser exploration", () => {
   })
 })
 
-describe("observed transactional planning and review-only execution", () => {
+describe("observed transactional planning and guarded execution", () => {
+  it("completes a checkout scenario that ends at the observed Finish click", async () => {
+    const discovery = await explore()
+    const raw = observedPlan(discovery)
+    const checkout = raw.tests.at(-1)!
+    checkout.id = "complete-checkout-with-valid-information"
+    checkout.actions.pop()
+    assert.equal(checkout.actions.at(-1)?.type, "click")
+
+    const plan = await createTestPlan(discovery, { generateTestPlan: async () => raw })
+    assert.equal(plan.execution, "transactional")
+    assert.deepEqual(plan.tests.at(-1)?.actions.at(-1), {
+      type: "assertText", target: "page", text: "Test checkout complete",
+    })
+    assertClosed()
+  })
   it("passes all observed evidence to planning and accepts cart/checkout scenarios with only exact test data", async () => {
     const discovery = await explore(true)
     const raw = observedPlan(discovery)
@@ -356,7 +371,7 @@ describe("observed transactional planning and review-only execution", () => {
       assert.ok(system.includes("interaction.fills"))
       return raw
     } })
-    assert.equal(plan.execution, "review-only")
+    assert.equal(plan.execution, "transactional")
     assert.equal(plan.tests.length, 6)
     assert.ok(plan.tests.some((test) => test.category === "validation"))
     assert.ok(plan.tests.at(-1)!.actions.some((action) => action.type === "click" && action.target === "Finish"))
@@ -368,11 +383,72 @@ describe("observed transactional planning and review-only execution", () => {
     const workflow = store.create("owner", `${origin}/login`, { username: USER, password: PASSWORD }, discovery)
     try {
       store.beginPlanning(workflow.id, "owner", discovery); store.attachPlan(workflow.id, "owner", plan)
-      assert.throws(() => store.claim(workflow.id, "owner", origin, plan), WorkflowError)
+      assert.equal(store.claim(workflow.id, "owner", origin, plan), workflow)
     } finally { store.remove(workflow.id) }
     assertClosed()
   })
-  it("rejects model-invented data, missing fills and unobserved transitions", async () => {
+  for (const authenticated of [false, true]) it(`replays only the recorded checkout path in a fresh ${authenticated ? "authenticated" : "public"} session`, async () => {
+    if (!authenticated) documents["/catalog"] += '<button onclick="location=\'/unobserved-item\'">Add to cart</button>'
+    const discovery = await explore(authenticated)
+    if (!authenticated) assert.ok(discovery.transitions[0]!.interaction!.controlIndex >= 0)
+    const raw = observedPlan(discovery)
+    const plan = await createTestPlan(discovery, { generateTestPlan: async () => ({ ...raw, tests: [raw.tests.at(-1)] }) })
+    const entryUrl = `${origin}/${authenticated ? "login" : "catalog"}`
+    const store = new AuthWorkflowStore()
+    const workflow = store.create("owner", entryUrl, authenticated ? { username: USER, password: PASSWORD } : undefined, discovery)
+    try {
+      store.beginPlanning(workflow.id, "owner", discovery)
+      store.attachPlan(workflow.id, "owner", plan)
+      store.claim(workflow.id, "owner", entryUrl, plan)
+      const result = await executeTransactionalRun(workflow, dependencies)
+      assert.equal(result.results.length, 1)
+      assert.equal(result.results[0]?.status, "passed", JSON.stringify(result.results[0]))
+      assert.equal(result.results[0]?.finalUrl, `${origin}/confirmation`)
+      assert.ok(requests.filter((request) => request.path === "/confirmation").length >= 2)
+      assert.equal(requests.some((request) => request.path === "/changed"), false)
+      assert.equal(JSON.stringify(result).includes(PASSWORD), false)
+      assertClosed()
+    } finally { store.remove(workflow.id) }
+  })
+  it("stops replay before Finish when a checkout destination differs from the recorded state", async () => {
+    const discovery = await explore()
+    const raw = observedPlan(discovery)
+    const plan = await createTestPlan(discovery, { generateTestPlan: async () => ({ ...raw, tests: [raw.tests.at(-1)] }) })
+    const confirmationsBefore = requests.filter((request) => request.path === "/confirmation").length
+    documents["/summary"] = '<h1>Changed summary</h1><button onclick="location=\'/confirmation\'">Finish</button>'
+    const store = new AuthWorkflowStore()
+    const workflow = store.create("owner", `${origin}/catalog`, undefined, discovery)
+    try {
+      store.beginPlanning(workflow.id, "owner", discovery)
+      store.attachPlan(workflow.id, "owner", plan)
+      store.claim(workflow.id, "owner", `${origin}/catalog`, plan)
+      const run = await executeTransactionalRun(workflow, dependencies)
+      assert.equal(run.results[0]?.status, "failed")
+      assert.equal(run.results[0]?.actions.at(-1)?.type, "click")
+      assert.equal(requests.filter((request) => request.path === "/confirmation").length, confirmationsBefore)
+      assertClosed()
+    } finally { store.remove(workflow.id) }
+  })
+  it("runs cart, validation and completion scenarios in separate guarded sessions", async () => {
+    const discovery = await explore()
+    const raw = observedPlan(discovery)
+    const plan = await createTestPlan(discovery, { generateTestPlan: async () => ({ ...raw,
+      tests: [raw.tests[1], raw.tests[3], raw.tests[5]],
+    }) })
+    const store = new AuthWorkflowStore()
+    const workflow = store.create("owner", `${origin}/catalog`, undefined, discovery)
+    try {
+      store.beginPlanning(workflow.id, "owner", discovery)
+      store.attachPlan(workflow.id, "owner", plan)
+      store.claim(workflow.id, "owner", `${origin}/catalog`, plan)
+      const run = await executeTransactionalRun(workflow, dependencies)
+      assert.deepEqual(run.results.map((result) => result.status), ["passed", "passed", "passed"])
+      assert.equal(run.results.at(-1)?.finalUrl, `${origin}/confirmation`)
+      assert.equal(requests.some((request) => request.path === "/changed"), false)
+      assertClosed()
+    } finally { store.remove(workflow.id) }
+  })
+  it("replaces model-invented data, missing fills and unobserved transitions with a recorded path", async () => {
     const discovery = await explore()
     const raw = observedPlan(discovery)
     for (const variant of ["data", "missing", "click"] as const) {
@@ -381,8 +457,17 @@ describe("observed transactional planning and review-only execution", () => {
       if (variant === "data") { const fill = actions.find((action) => action.type === "fill")!; if (fill.type === "fill") fill.value = "Real Person" }
       if (variant === "missing") actions.splice(actions.findIndex((action) => action.type === "fill"), 1)
       if (variant === "click") { const click = actions.find((action) => action.type === "click")!; if (click.type === "click") click.target = "Pay now" }
-      await assert.rejects(() => createTestPlan(discovery, { generateTestPlan: async () => changed }), InvalidTestPlanError)
+      const safe = await createTestPlan(discovery, { generateTestPlan: async () => changed })
+      assert.equal(safe.execution, "transactional")
+      assert.ok(safe.tests.some((test) => test.actions.some((action) => action.type === "click" && action.target === "Finish")))
+      assert.equal(JSON.stringify(safe).includes("Real Person"), false)
+      assert.equal(JSON.stringify(safe).includes("Pay now"), false)
     }
+    const malformed = await createTestPlan(discovery, { generateTestPlan: async () => ({ ...raw,
+      tests: [{ ...raw.tests[0], actions: [{ type: "evaluate", code: "dangerous" }] }],
+    }) })
+    assert.equal(malformed.execution, "transactional")
+    assert.equal(JSON.stringify(malformed).includes("dangerous"), false)
     assertClosed()
   })
 })

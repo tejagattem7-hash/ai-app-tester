@@ -168,7 +168,8 @@ async function executeAction(session: ExecutionSession, action: TestAction, vali
 }
 
 export async function executeTestRun(request: TestRunRequest, suppliedDependencies?: ExecutionDependencies): Promise<TestRunResult> {
-  if (request.plan.execution === "review-only") throw new AuthenticatedExecutionUnavailableError("Transactional plans are review-only. Guarded transactional replay and test-state reset are not implemented.")
+  if (request.plan.execution === "review-only") throw new AuthenticatedExecutionUnavailableError("Review-only plans cannot run. Create a new transactional plan to obtain a guarded workflow.")
+  if (request.plan.execution === "transactional") throw new AuthenticatedExecutionUnavailableError("Transactional tests require their original active workflow.")
   if (request.plan.execution === "discovery-only") throw new AuthenticatedExecutionUnavailableError()
   const ownsDependencies = !suppliedDependencies
   const dependencies = suppliedDependencies ?? await createPlaywrightDependencies()

@@ -1,4 +1,4 @@
-// Separate server-owned limits. Read-only exploration keeps its original limits.
+// Separate server-owned limits for opted-in state-changing exploration.
 export const MAX_TRANSACTIONAL_STATES = 10
 export const MAX_TRANSACTIONAL_DEPTH = 8
 export const MAX_TRANSACTIONAL_INTERACTIONS = 20
@@ -10,7 +10,8 @@ export class TransactionalExplorationError extends Error {
 }
 
 export function isTransactionalModeEnabled(): boolean {
-  return process.env.TRANSACTIONAL_MODE_ENABLED === "true"
+  const setting = process.env.TRANSACTIONAL_MODE_ENABLED
+  return setting === undefined || setting === "true"
 }
 
 export function assertTransactionalModeEnabled(): void {

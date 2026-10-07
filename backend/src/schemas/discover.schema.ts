@@ -12,9 +12,11 @@ export const discoverRequestSchema = z.object({
 export const exploreRequestSchema = discoverRequestSchema.extend({
   authenticated: z.boolean().optional().default(false),
   transactionalExploration: z.boolean().optional().default(false),
+  thoroughExploration: z.boolean().optional().default(false),
   username: z.string().trim().min(1, "Username / Email is required").max(1024, "Username / Email is too long").optional(),
   password: z.string().min(1, "Password is required").max(4096, "Password is too long").optional(),
-}).strict().superRefine(({ authenticated, username, password }, context) => {
+}).strict().superRefine(({ authenticated, username, password, transactionalExploration, thoroughExploration }, context) => {
+  if (transactionalExploration && thoroughExploration) context.addIssue({ code: "custom", message: "Select only one exploration mode" })
   if (username === undefined && password === undefined) return // Use the backend-configured account.
   if (!authenticated) context.addIssue({ code: "custom", message: "Credentials require authenticated exploration" })
   if (username === undefined) context.addIssue({ code: "custom", path: ["username"], message: "Username / Email is required" })

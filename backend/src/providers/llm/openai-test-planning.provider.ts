@@ -44,7 +44,8 @@ export class OpenAiTestPlanningProvider implements TestPlanningLlmProvider {
         throw new LlmProviderError("OpenAI authentication failed; check the backend OPENAI_API_KEY")
       }
       if (error instanceof OpenAI.RateLimitError) {
-        throw new LlmProviderError("OpenAI rate limit reached; try again later")
+        throw new LlmProviderError("OpenAI rate limit reached; try again later",
+          error.code === "credit_balance_exhausted" ? { code: "credit-balance-exhausted" } : undefined)
       }
       if (error instanceof z.ZodError || error instanceof SyntaxError) {
         throw new LlmProviderError("OpenAI returned a plan that does not match the required schema")

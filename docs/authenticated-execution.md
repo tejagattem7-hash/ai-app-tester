@@ -24,7 +24,7 @@ Plaintext strings necessarily exist during active discovery, planning redaction 
 
 ## Deployment boundary
 
-The UI and API must be served on the same origin. The development Vite proxy preserves Host. Foreign origins are rejected rather than allowed through broad CORS configuration. HTTPS must reach Express with a correctly trusted protocol configuration before deploying behind a TLS-terminating proxy; this prototype does not blindly trust forwarded headers. Do not log request bodies, cookies or `X-Auth-Workflow` in external proxies or middleware.
+The UI and API must be served on the same origin. The development Vite proxy preserves Host; the compiled Node server serves the built UI with its API. Foreign origins are rejected rather than allowed through broad CORS configuration. Behind a TLS-terminating proxy, configure `TRUST_PROXY_CIDRS` for that proxy's connecting address, preserve Host, and overwrite `X-Forwarded-Proto`. The Node port must not be directly reachable by clients when proxy trust is enabled. Do not log request bodies, cookies or `X-Auth-Workflow` in external proxies or middleware.
 
 The store, encryption key and cookie signing key are process-local. Restarts invalidate pending workflows. Multi-process deployment would require a separate design for shared temporary state and ownership; no database, file persistence or session persistence is introduced here. OAuth, MFA and CAPTCHA remain unsupported. Authenticated actions retain the discovery guard's conservative safe-navigation scope.
 

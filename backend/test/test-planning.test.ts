@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 import type { TestPlanningLlmProvider } from "../src/providers/llm/test-planning.provider.js"
 import type { DiscoveryResultInput } from "../src/schemas/discovery-result.schema.js"
-import { EXPLORATION_TIMEOUT_MS, MAX_EXPLORATION_DEPTH, MAX_EXPLORATION_INTERACTIONS, MAX_EXPLORATION_PAGES } from "../src/config/exploration.js"
+import { EXPLORATION_TIMEOUT_MS, MAX_EXPLORATION_DEPTH, MAX_EXPLORATION_INTERACTIONS, MAX_EXPLORATION_PAGES, MAX_THOROUGH_DEPTH, MAX_THOROUGH_INTERACTIONS, MAX_THOROUGH_PAGES, THOROUGH_TIMEOUT_MS } from "../src/config/exploration.js"
 import { explorationResultSchema, planningDiscoverySchema } from "../src/schemas/exploration-result.schema.js"
 import { MAX_TEST_SCENARIOS, testPlanSchema } from "../src/schemas/test-plan.schema.js"
 import { createTestPlan, InvalidTestPlanError } from "../src/services/test-planning.service.js"
@@ -47,6 +47,27 @@ function observedExploration() {
 }
 
 describe("test planning", () => {
+  it("keeps later pages in a bounded thorough-crawl model prompt", async () => {
+    const observed = observedExploration()
+    const thorough = explorationResultSchema.parse({ ...observed,
+      thoroughExploration: { enabled: true },
+      limits: { maxPages: MAX_THOROUGH_PAGES, maxDepth: MAX_THOROUGH_DEPTH,
+        timeoutMs: THOROUGH_TIMEOUT_MS, maxInteractions: MAX_THOROUGH_INTERACTIONS },
+      pages: [{ ...observed.pages[0], links: Array.from({ length: 100 }, (_, index) => ({ text: `Link ${index}`, href: `https://example.com/page-${index}` })) }, observed.pages[1]],
+    })
+    const result = await createTestPlan(thorough, { async generateTestPlan({ input }) {
+      const evidence = JSON.parse(input.slice(input.indexOf("\n") + 1)) as typeof thorough
+      assert.equal(evidence.pages.length, 2)
+      assert.equal(evidence.pages[0]?.links.length, 25)
+      assert.equal(evidence.pages[1]?.visibleText.headings[0]?.text, "Profile")
+      return { pagePurpose: "Observed journey", tests: [{ id: "profile", title: "Reach profile", category: "navigation",
+        reason: "Observed path", expectedOutcome: "Profile is visible", actions: [
+          { type: "navigate", url: thorough.startUrl }, { type: "click", target: "Get Started" },
+          { type: "assertText", target: "page", text: "Profile" },
+        ] }] }
+    } })
+    assert.equal(result.tests.length, 1)
+  })
   it("accepts a valid provider response", async () => {
     const result = await createTestPlan(discovery, providerFor({
       pagePurpose: "Explain an example domain",
@@ -109,6 +130,18 @@ describe("test planning", () => {
       })),
       InvalidTestPlanError,
     )
+  })
+
+  it("does not invent a final check when an observed click has no distinct outcome", async () => {
+    const exploration = observedExploration()
+    const ambiguous = explorationResultSchema.parse({ ...exploration, pages: [exploration.pages[0], {
+      ...exploration.pages[1], visibleText: exploration.pages[0]!.visibleText,
+    }] })
+    await assert.rejects(() => createTestPlan(ambiguous, providerFor({
+      pagePurpose: "Ambiguous transition", tests: [{ ...scenario("ambiguous-click"), actions: [
+        { type: "navigate", url: ambiguous.startUrl }, { type: "click", target: "Get Started" },
+      ] }],
+    })), /must end with an assertion/)
   })
 
   it("forwards multiple observed SPA states and recorded entry paths to the existing planner", async () => {

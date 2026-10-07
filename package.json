@@ -4,9 +4,11 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "node --env-file-if-exists=.env backend/scripts/dev.mjs",
+    "dev:frontend": "node --env-file-if-exists=.env node_modules/vite/bin/vite.js --strictPort",
     "dev:server": "node --env-file-if-exists=.env --import tsx --watch backend/src/index.ts",
     "build": "tsc -b && vite build",
+    "start": "node backend/dist/index.js",
     "start:server": "node backend/dist/index.js",
     "lint": "eslint .",
     "test": "node --import tsx --test backend/test/*.test.ts",

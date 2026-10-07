@@ -24,14 +24,14 @@ exploreRouter.post("/", async (request, response) => {
   }
   response.on("close", disconnected)
   try {
-    const { url, authenticated, username, password, transactionalExploration } = exploreRequestSchema.parse(request.body)
+    const { url, authenticated, username, password, transactionalExploration, thoroughExploration } = exploreRequestSchema.parse(request.body)
     if (transactionalExploration) assertTransactionalModeEnabled()
-    const owner = authenticated ? workflowOwner(request, response, true) : undefined
+    const owner = authenticated || transactionalExploration ? workflowOwner(request, response, true) : undefined
     const supplied = username !== undefined && password !== undefined ? { username, password } : undefined
     const credentials = authenticated ? getTestCredentials(url, supplied) : undefined
-    const result = await exploreApplication(url, undefined, { authenticated, credentials, transactionalExploration, signal: authenticated || transactionalExploration ? controller.signal : undefined })
+    const result = await exploreApplication(url, undefined, { authenticated, credentials, transactionalExploration, thoroughExploration, signal: controller.signal })
     if (controller.signal.aborted) throw new WorkflowError()
-    if (owner && credentials && !transactionalExploration) {
+    if (owner && (credentials || transactionalExploration)) {
       const workflow = authWorkflows.create(owner, url, credentials, result)
       createdId = workflow.id
       response.set("X-Auth-Workflow", workflow.id).set("Cache-Control", "no-store")

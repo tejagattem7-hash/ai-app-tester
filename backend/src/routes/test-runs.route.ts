@@ -4,6 +4,7 @@ import { testRunRequestSchema } from "../schemas/test-run.schema.js"
 import { AuthenticatedExecutionUnavailableError, executeTestRun, PublicUrlError } from "../services/test-execution.service.js"
 import { authWorkflows, type AuthWorkflow, WorkflowError } from "../services/auth-workflow.service.js"
 import { executeAuthenticatedRun } from "../services/authenticated-execution.service.js"
+import { executeTransactionalRun } from "../services/transactional-execution.service.js"
 import { workflowId, workflowOwner } from "../utils/workflow-session.js"
 import { AuthenticationError } from "../config/authentication.js"
 
@@ -18,7 +19,8 @@ testRunsRouter.post("/", async (request, response) => {
     const id = workflowId(request)
     if (id) {
       workflow = authWorkflows.claim(id, workflowOwner(request, response), testRun.url, testRun.plan)
-      const result = await executeAuthenticatedRun(workflow)
+      const result = workflow.discovery.transactionalExploration
+        ? await executeTransactionalRun(workflow) : await executeAuthenticatedRun(workflow)
       if (workflow.controller.signal.aborted) throw new WorkflowError()
       response.set("Cache-Control", "no-store").json(result)
       return

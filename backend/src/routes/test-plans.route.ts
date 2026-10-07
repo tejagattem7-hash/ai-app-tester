@@ -11,8 +11,7 @@ import { SecretRedactor } from "../utils/secret-redaction.js"
 export const testPlansRouter = Router()
 
 function exhaustedCredits(error: unknown): boolean {
-  if (!(error instanceof LlmProviderError) || !error.cause || typeof error.cause !== "object") return false
-  return "code" in error.cause && error.cause.code === "credit_balance_exhausted"
+  return error instanceof LlmProviderError && error.code === "credit-balance-exhausted"
 }
 
 testPlansRouter.post("/", async (request, response) => {
@@ -25,8 +24,10 @@ testPlansRouter.post("/", async (request, response) => {
     if (id) workflow = authWorkflows.beginPlanning(id, workflowOwner(request, response), discovery)
     const provider = getConfiguredTestPlanningProvider()
     const associated = workflow
-    const plan = associated ? await withWorkflowCredentials(associated, (credentials) => createTestPlan(associated.discovery, provider,
-      new SecretRedactor([credentials.username, credentials.password, associated.id, associated.owner])))
+    const plan = associated ? associated.encryptedCredentials
+      ? await withWorkflowCredentials(associated, (credentials) => createTestPlan(associated.discovery, provider,
+        new SecretRedactor([credentials.username, credentials.password, associated.id, associated.owner])))
+      : await createTestPlan(associated.discovery, provider, new SecretRedactor([associated.id, associated.owner]))
       : await createTestPlan(discovery, provider)
     if (workflow) authWorkflows.attachPlan(workflow.id, workflow.owner, plan)
     response.set("Cache-Control", "no-store")
