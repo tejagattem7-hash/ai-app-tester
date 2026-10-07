@@ -4,11 +4,13 @@ import type { Server } from "node:http"
 import type { AddressInfo } from "node:net"
 import express from "express"
 import { app } from "../src/app.js"
-import { AuthWorkflowStore, authWorkflows, WorkflowError } from "../src/services/auth-workflow.service.js"
+import { AuthWorkflowStore, authWorkflows, WorkflowError, withWorkflowCredentials } from "../src/services/auth-workflow.service.js"
+import { decryptCredentials, encryptCredentials } from "../src/utils/workflow-credentials.js"
 import { workflowOwner } from "../src/utils/workflow-session.js"
 import { explorationResultSchema } from "../src/schemas/exploration-result.schema.js"
 import type { TestPlan } from "../src/schemas/test-plan.schema.js"
 import { OpenAiTestPlanningProvider } from "../src/providers/llm/openai-test-planning.provider.js"
+import { LlmProviderError } from "../src/providers/llm/test-planning.provider.js"
 import { chromium } from "playwright"
 
 const url = "https://example.com/app"
@@ -22,6 +24,88 @@ const plan: TestPlan = { pagePurpose: "Dashboard", tests: [{ id: "dashboard", ti
   actions: [{ type: "navigate", url }, { type: "assertText", target: "page", text: "Dashboard" }] }], execution: "discovery-only" }
 
 describe("temporary authenticated workflow lifecycle", () => {
+  it("encrypts retained credentials with fresh nonces and preserves exact Unicode/password whitespace", async () => {
+    const store = new AuthWorkflowStore()
+    const original = { username: "fixture-üser@example.test", password: "  fixture-密碼-🔒  " }
+    const workflow = store.create("owner", url, original, discovery)
+    try {
+      assert.equal("credentials" in workflow, false)
+      for (const secret of Object.values(original)) assert.equal(JSON.stringify(workflow).includes(secret), false)
+      const encrypted = workflow.encryptedCredentials!
+      assert.equal(encrypted.nonce.length, 12)
+      assert.equal(encrypted.authTag.length, 16)
+      assert.deepEqual(decryptCredentials(encrypted, workflow), original)
+      const again = encryptCredentials(original, workflow)
+      assert.notDeepEqual(again.nonce, encrypted.nonce)
+      assert.notDeepEqual(again.ciphertext, encrypted.ciphertext)
+      store.beginPlanning(workflow.id, "owner", discovery)
+      let temporary: typeof original | undefined
+      await withWorkflowCredentials(workflow, async (value) => { temporary = value; assert.deepEqual(value, original) })
+      assert.deepEqual(temporary, { username: "", password: "" })
+      store.remove(workflow.id)
+      assert.equal(workflow.encryptedCredentials, undefined)
+      for (const buffer of Object.values(encrypted)) assert.ok(buffer.every((byte) => byte === 0))
+    } finally { store.remove(workflow.id) }
+  })
+
+  it("refuses tampered ciphertext, nonce, tags, swapped records and modified workflow bindings", async () => {
+    const store = new AuthWorkflowStore()
+    const workflow = store.create("owner", url, credentials, discovery)
+    const other = store.create("owner", url, credentials, discovery)
+    try {
+      store.beginPlanning(workflow.id, "owner", discovery)
+      const encrypted = workflow.encryptedCredentials!
+      const reject = async () => {
+        let used = false
+        await assert.rejects(withWorkflowCredentials(workflow, async () => { used = true }), WorkflowError)
+        assert.equal(used, false)
+      }
+      for (const field of ["ciphertext", "nonce", "authTag"] as const) {
+        workflow.encryptedCredentials = { ...encrypted, [field]: Buffer.from(encrypted[field]) }
+        workflow.encryptedCredentials[field][0]! ^= 1
+        await reject()
+      }
+      workflow.encryptedCredentials = { ...encrypted, authTag: encrypted.authTag.subarray(0, 12) }
+      await reject()
+      workflow.encryptedCredentials = other.encryptedCredentials
+      await reject()
+      workflow.encryptedCredentials = encrypted
+      for (const field of ["id", "owner", "origin", "entryUrl"] as const) {
+        const previous = workflow[field]
+        workflow[field] += "changed"
+        await reject()
+        workflow[field] = previous
+      }
+      const expiry = workflow.expiresAt
+      workflow.expiresAt += 60_000
+      await reject()
+      workflow.expiresAt = expiry
+      await withWorkflowCredentials(workflow, async (value) => assert.deepEqual(value, credentials))
+    } finally { store.remove(workflow.id); store.remove(other.id) }
+  })
+
+  it("limits decryption to active work and clears temporary credentials on failure", async () => {
+    const store = new AuthWorkflowStore()
+    const workflow = store.create("owner", url, credentials, discovery)
+    try {
+      const use = async () => { throw new Error("must not be called") }
+      await assert.rejects(withWorkflowCredentials(workflow, use), WorkflowError)
+      store.beginPlanning(workflow.id, "owner", discovery)
+      let temporary: typeof credentials | undefined
+      await assert.rejects(withWorkflowCredentials(workflow, async (value) => { temporary = value; throw new Error("fixture failure") }), /fixture failure/)
+      assert.deepEqual(temporary, { username: "", password: "" })
+      store.attachPlan(workflow.id, "owner", plan)
+      await assert.rejects(withWorkflowCredentials(workflow, use), WorkflowError)
+      store.claim(workflow.id, "owner", url, plan)
+      const expiry = workflow.expiresAt
+      workflow.expiresAt = Date.now() - 1
+      await assert.rejects(withWorkflowCredentials(workflow, use), WorkflowError)
+      workflow.expiresAt = expiry
+      store.cancel(workflow.id, "owner")
+      await assert.rejects(withWorkflowCredentials(workflow, use), WorkflowError)
+    } finally { store.remove(workflow.id) }
+  })
+
   it("binds random IDs to owners, exact origins and associated plans; claims only once", () => {
     const store = new AuthWorkflowStore()
     const workflow = store.create("owner", url, credentials, discovery)
@@ -38,7 +122,7 @@ describe("temporary authenticated workflow lifecycle", () => {
       assert.throws(() => store.claim(workflow.id, "owner", url, plan), WorkflowError)
       store.remove(workflow.id)
       assert.equal(workflow.controller.signal.aborted, true)
-      assert.deepEqual(workflow.credentials, { username: "", password: "" })
+      assert.equal(workflow.encryptedCredentials, undefined)
       assert.throws(() => store.get(workflow.id, "owner"), WorkflowError)
       assert.equal(credentials.password, "fixture-private-password")
     } finally { store.remove(workflow.id) }
@@ -53,7 +137,7 @@ describe("temporary authenticated workflow lifecycle", () => {
     await new Promise((resolve) => setTimeout(resolve, 50))
     assert.throws(() => store.get(workflow.id, "owner"), WorkflowError)
     assert.equal(workflow.controller.signal.aborted, true)
-    assert.equal(workflow.credentials.password, "")
+    assert.equal(workflow.encryptedCredentials, undefined)
   })
 })
 
@@ -88,6 +172,31 @@ const post = (path: string, cookie: string, id: string, body: unknown = {}) => f
 })
 
 describe("workflow API ownership and planning", () => {
+  it("returns safe errors and cleans up corrupted credentials before planning or browser startup", async () => {
+    const a = await owner()
+    const launch = mock.method(chromium, "launch", async () => { throw new Error("must not launch") })
+    const provider = mock.method(OpenAiTestPlanningProvider.prototype, "generateTestPlan", async () => { throw new Error("must not call model") })
+    try {
+      for (const path of ["test-plans", "test-runs"]) {
+        const workflow = authWorkflows.create(a.owner, url, credentials, discovery)
+        try {
+          if (path === "test-runs") {
+            authWorkflows.beginPlanning(workflow.id, a.owner, discovery)
+            authWorkflows.attachPlan(workflow.id, a.owner, plan)
+          }
+          workflow.encryptedCredentials!.authTag[0]! ^= 1
+          const response = await post(path, a.cookie, workflow.id, path === "test-plans" ? discovery : { url, plan })
+          assert.equal(response.status, 409)
+          assert.deepEqual(await response.json(), { error: "Authenticated workflow unavailable", code: "workflow-unavailable" })
+          assert.equal(workflow.encryptedCredentials, undefined)
+          assert.throws(() => authWorkflows.get(workflow.id, a.owner), WorkflowError)
+        } finally { authWorkflows.remove(workflow.id) }
+      }
+      assert.equal(launch.mock.callCount(), 0)
+      assert.equal(provider.mock.callCount(), 0)
+    } finally { launch.mock.restore(); provider.mock.restore() }
+  })
+
   it("deletes the claimed workflow on execution failure and rejects replay", async () => {
     const a = await owner()
     const workflow = authWorkflows.create(a.owner, "https://8.8.8.8", credentials, { ...discovery, startUrl: "https://8.8.8.8/app" })
@@ -97,7 +206,7 @@ describe("workflow API ownership and planning", () => {
       const response = await post("test-runs", a.cookie, workflow.id, { url: "https://8.8.8.8", plan })
       assert.equal(response.status, 502)
       assert.equal((await response.text()).includes(credentials.password), false)
-      assert.equal(workflow.credentials.password, "")
+      assert.equal(workflow.encryptedCredentials, undefined)
       assert.equal((await post("test-runs", a.cookie, workflow.id, { url: "https://8.8.8.8", plan })).status, 409)
     } finally { launch.mock.restore(); authWorkflows.remove(workflow.id) }
   })
@@ -112,7 +221,7 @@ describe("workflow API ownership and planning", () => {
       assert.equal(tampered.status, 409)
       assert.equal(authWorkflows.get(workflow.id, a.owner), workflow)
       assert.equal((await post("auth-workflows/cancel", a.cookie, workflow.id)).status, 204)
-      assert.equal((await post("auth-workflows/cancel", a.cookie, workflow.id)).status, 409)
+      assert.equal((await post("auth-workflows/cancel", a.cookie, workflow.id)).status, 204)
     } finally { authWorkflows.remove(workflow.id) }
   })
 
@@ -147,12 +256,29 @@ describe("workflow API ownership and planning", () => {
     try {
       const response = await post("test-plans", a.cookie, workflow.id, discovery)
       assert.equal(response.status, 502); assert.equal((await response.text()).includes(credentials.password), false)
-      assert.equal(workflow.credentials.password, "")
+      assert.equal(workflow.encryptedCredentials, undefined)
       assert.throws(() => authWorkflows.get(workflow.id, a.owner), WorkflowError)
       const expired = authWorkflows.create(a.owner, url, credentials, discovery)
       expired.expiresAt = Date.now() - 1
       assert.equal((await post("test-plans", a.cookie, expired.id, discovery)).status, 409)
-      assert.equal(expired.credentials.password, "")
+      assert.equal(expired.encryptedCredentials, undefined)
+    } finally { provider.mock.restore(); authWorkflows.remove(workflow.id) }
+  })
+
+  it("reports exhausted AI credits without leaking provider details and allows cleanup to be repeated", async () => {
+    const a = await owner()
+    const workflow = authWorkflows.create(a.owner, url, credentials, discovery)
+    const provider = mock.method(OpenAiTestPlanningProvider.prototype, "generateTestPlan", async () => {
+      throw new LlmProviderError("private provider message", {
+        cause: Object.assign(new Error(credentials.password), { status: 429, code: "credit_balance_exhausted" }),
+      })
+    })
+    try {
+      const response = await post("test-plans", a.cookie, workflow.id, discovery)
+      assert.equal(response.status, 503)
+      assert.deepEqual(await response.json(), { error: "AI planning credits are exhausted", code: "llm-credit-exhausted" })
+      assert.equal(workflow.encryptedCredentials, undefined)
+      assert.equal((await post("auth-workflows/cancel", a.cookie, workflow.id)).status, 204)
     } finally { provider.mock.restore(); authWorkflows.remove(workflow.id) }
   })
 })
