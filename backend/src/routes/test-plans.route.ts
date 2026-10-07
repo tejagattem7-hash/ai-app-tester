@@ -4,11 +4,16 @@ import { getConfiguredTestPlanningProvider } from "../providers/llm/configured-p
 import { LlmConfigurationError, LlmProviderError } from "../providers/llm/test-planning.provider.js"
 import { planningDiscoverySchema } from "../schemas/exploration-result.schema.js"
 import { createTestPlan, InvalidTestPlanError } from "../services/test-planning.service.js"
-import { authWorkflows, type AuthWorkflow, WorkflowError } from "../services/auth-workflow.service.js"
+import { authWorkflows, type AuthWorkflow, WorkflowError, withWorkflowCredentials } from "../services/auth-workflow.service.js"
 import { workflowId, workflowOwner } from "../utils/workflow-session.js"
 import { SecretRedactor } from "../utils/secret-redaction.js"
 
 export const testPlansRouter = Router()
+
+function exhaustedCredits(error: unknown): boolean {
+  if (!(error instanceof LlmProviderError) || !error.cause || typeof error.cause !== "object") return false
+  return "code" in error.cause && error.cause.code === "credit_balance_exhausted"
+}
 
 testPlansRouter.post("/", async (request, response) => {
   let workflow: AuthWorkflow | undefined
@@ -18,15 +23,31 @@ testPlansRouter.post("/", async (request, response) => {
     const discovery = planningDiscoverySchema.parse(request.body)
     const id = workflowId(request)
     if (id) workflow = authWorkflows.beginPlanning(id, workflowOwner(request, response), discovery)
-    const redactor = workflow ? new SecretRedactor([workflow.credentials.username, workflow.credentials.password, workflow.id, workflow.owner]) : undefined
-    const plan = await createTestPlan(workflow?.discovery ?? discovery, getConfiguredTestPlanningProvider(), redactor)
+    const provider = getConfiguredTestPlanningProvider()
+    const associated = workflow
+    const plan = associated ? await withWorkflowCredentials(associated, (credentials) => createTestPlan(associated.discovery, provider,
+      new SecretRedactor([credentials.username, credentials.password, associated.id, associated.owner])))
+      : await createTestPlan(discovery, provider)
     if (workflow) authWorkflows.attachPlan(workflow.id, workflow.owner, plan)
     response.set("Cache-Control", "no-store")
     response.json(plan)
   } catch (error) {
     if (workflow) authWorkflows.remove(workflow.id)
     if (error instanceof WorkflowError) { response.status(409).json({ error: "Authenticated workflow unavailable", code: error.code }); return }
-    if (request.get("x-auth-workflow")) { response.status(502).json({ error: "Unable to generate authenticated plan", code: "workflow-planning-failed" }); return }
+    if (request.get("x-auth-workflow")) {
+      if (exhaustedCredits(error)) {
+        response.status(503).json({ error: "AI planning credits are exhausted", code: "llm-credit-exhausted" })
+      } else if (error instanceof LlmConfigurationError) {
+        response.status(503).json({ error: "AI planning is not configured", code: "llm-not-configured" })
+      } else if (error instanceof LlmProviderError) {
+        response.status(502).json({ error: "AI planning provider failed", code: "llm-provider-failed" })
+      } else if (error instanceof InvalidTestPlanError) {
+        response.status(502).json({ error: "AI plan did not pass validation", code: "llm-plan-invalid" })
+      } else {
+        response.status(502).json({ error: "Unable to generate authenticated plan", code: "workflow-planning-failed" })
+      }
+      return
+    }
     if (error instanceof z.ZodError) {
       response.status(400).json({ error: "Invalid discovery data", details: error.issues.map((issue) => issue.message) })
       return

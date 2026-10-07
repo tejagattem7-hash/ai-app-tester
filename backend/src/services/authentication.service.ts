@@ -8,7 +8,7 @@ import { resolveInput } from "./test-execution.service.js"
 
 const LOGIN_NAME = /^(log\s*in|sign\s*in)$/i
 const USERNAME_NAME = /\b(user\s*name|e[- ]?mail|login)\b/i
-const REJECTED = /\b(invalid|incorrect|wrong|failed|rejected|denied)\b.*\b(credentials?|password|login|authentication|email|username)\b|\b(login|authentication|sign in)\b.*\b(failed|rejected|denied)\b/i
+const REJECTED = /\b(invalid|incorrect|wrong|failed|rejected|denied)\b.*\b(credentials?|password|login|authentication|email|username)\b|\b(login|authentication|sign in)\b.*\b(failed|rejected|denied)\b|\b(?:username|user name|email|password)\b.{0,100}\b(?:do(?:es)? not|don't|doesn't)\s+match\b/i
 const AUTH_CHALLENGE = /\b(mfa|captcha|passkey|authenticator|verification|two.factor|multi.factor|one.time)\b|\bverify\s+(your\s+)?(identity|email|account)\b/i
 
 export interface LoginControls { username: Locator; password: Locator; submit: Locator; formAction?: string }

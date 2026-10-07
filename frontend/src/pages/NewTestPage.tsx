@@ -69,7 +69,6 @@ export function NewTestPage() {
     }
     const submittedUrl = url
     setIsLoading(true)
-    let discovering = true
     const operation: { controller: AbortController; id?: string } = { controller: new AbortController() }
     pending.current = operation
 
@@ -77,7 +76,6 @@ export function NewTestPage() {
       const credentials = authenticated && authMode === "manual" ? { username: username.trim(), password } : undefined
       const discovery = await (explore ? exploreApplication(submittedUrl, authenticated, credentials, (id) => { operation.id = id }, operation.controller.signal, transactionalExploration) : discoverPage(submittedUrl))
       clearCredentials()
-      discovering = false
       const plan = await createTestPlan(discovery, operation.id, operation.controller.signal)
       if (operation.controller.signal.aborted) return
       if (operation.id) retainAuthWorkflow(operation.id, plan)
@@ -86,7 +84,7 @@ export function NewTestPage() {
       navigate("/plan", { state })
     } catch (caughtError) {
       if (operation.id) void cancelAuthWorkflow(operation.id)
-      setError(discovering && caughtError instanceof Error ? caughtError.message : "Unable to create a test plan. Please try again.")
+      setError(caughtError instanceof Error ? caughtError.message : "Unable to create a test plan. Please try again.")
     } finally {
       if (pending.current === operation) pending.current = undefined
       clearCredentials()

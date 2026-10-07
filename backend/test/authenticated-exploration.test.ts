@@ -21,7 +21,7 @@ const PASSWORD = "fixture-test-password-4832"
 const TOKEN = "fixture-session-token-9638"
 let server: Server
 let baseUrl: string
-let mode: "success" | "reject" | "ambiguous" | "expire" | "redirect" | "native" | "oauth" | "external" | "get" | "loop"
+let mode: "success" | "reject" | "client-reject" | "ambiguous" | "expire" | "redirect" | "native" | "oauth" | "external" | "get" | "loop"
   | "native-external" | "native-private" | "native-credentials" | "challenge" | "client-external" | "changed" | "execution-external"
 let requests: { path: string; method: string; cookie: string }[]
 let browser: Browser | undefined
@@ -57,6 +57,11 @@ before(async () => {
       if (mode === "oauth") return response.end('<h1>Authentication</h1><a href="/api/auth/google">Continue with Google</a>')
       if (mode === "external") return response.end(loginForm.replace('action="/login"', 'action="https://example.org/login"'))
       if (mode === "get") return response.end(loginForm.replace('method="post"', 'method="get"'))
+      if (mode === "client-reject") return response.end(loginForm + `<script>document.querySelector('form').onsubmit = (event) => {
+        event.preventDefault(); const error = document.createElement('h3');
+        error.textContent = 'Epic sadface: Username and password do not match any user in this service';
+        document.body.append(error);
+      }</script>`)
       return response.end(loginForm + (mode.startsWith("native") || mode === "loop" ? "" : mode === "client-external"
         ? loginScript.replace("location.href='/workspace'", "location.href='https://example.org/never-request'") : loginScript))
     }
@@ -322,6 +327,18 @@ describe("optional authenticated exploration", () => {
     if (source === "UI") delete process.env.TEST_AUTH_ORIGIN
     const credentials = source === "UI" ? { username: USER, password: PASSWORD } : undefined
     await assert.rejects(() => exploreApplication(`${baseUrl}/auth`, dependencies, { authenticated: true, credentials }), codeIs("authentication-rejected"))
+    assertClosed()
+  })
+
+  it("recognizes a client-rendered password mismatch as rejected login", async () => {
+    mode = "client-reject"
+    delete process.env.TEST_AUTH_ORIGIN
+    delete process.env.TEST_AUTH_USERNAME
+    delete process.env.TEST_AUTH_PASSWORD
+    await assert.rejects(() => exploreApplication(`${baseUrl}/auth`, dependencies, {
+      authenticated: true, credentials: { username: USER, password: PASSWORD },
+    }), codeIs("authentication-rejected"))
+    assert.equal(requests.some((request) => request.method === "POST"), false)
     assertClosed()
   })
 

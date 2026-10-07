@@ -4,7 +4,7 @@ Authenticated discovery can now lead to one guarded execution of the generated p
 
 ## Workflow and ownership
 
-1. Successful authenticated exploration creates a random 256-bit workflow identifier. A bounded process-memory store retains the credentials, original application origin, entry URL, sanitized discovery, browser owner and a fixed ten-minute expiry. Capacity is 32 workflows.
+1. Successful authenticated exploration creates a random 256-bit workflow identifier. A bounded process-memory store retains encrypted credentials, original application origin, entry URL, sanitized discovery, browser owner and a fixed ten-minute expiry. Capacity is 32 workflows.
 2. The identifier is returned in `X-Auth-Workflow`, outside discovery JSON. The frontend retains it in module memory only. It never enters browser storage, URLs, router history, plans or reports. Reloading requires a new authenticated workflow.
 3. Ownership uses a separate server-signed random browser session cookie, `tester_browser`, with HttpOnly, SameSite=Strict, Path=/api, and Secure on HTTPS. The cookie contains neither credentials nor a workflow ID. Workflow APIs require both the cookie and identifier, reject foreign Origin/cross-site requests, and verify the stored owner. Knowing the identifier alone is insufficient.
 4. Planning sends the identifier in a header, verifies that submitted discovery exactly matches the stored discovery and associates the generated plan server-side. The LLM receives only sanitized discovery. Credentials, owner and identifier are excluded from prompts and generated plans.
@@ -14,15 +14,23 @@ Authenticated discovery can now lead to one guarded execution of the generated p
 
 The plan retains the existing `execution: "discovery-only"` marker. The ordinary executor still rejects it; only a valid server-owned association authorizes the separate guarded executor. The frontend enables Run tests only while it holds the matching workflow. Expired records are rejected server-side. Evaluation accepts the marker without treating it as execution authorization and receives only sanitized plan/results.
 
+## Temporary credential encryption
+
+The workflow credential pair is encrypted using AES-256-GCM with a random 256-bit key generated in process memory at backend startup. The key is kept outside workflow records, is never exported, and is not written to environment settings, files or a database. Each encryption uses a fresh random 12-byte nonce and a 16-byte authentication tag. Authenticated additional data binds the ciphertext to the workflow ID, browser owner, exact application origin, entry URL and fixed expiry. Modified or swapped records fail verification before credentials are used. This uses [Node's authenticated encryption APIs](https://nodejs.org/api/crypto.html#deciphersetauthtagbuffer-encoding).
+
+Initial discovery still needs the supplied plaintext credentials for login. After discovery, only ciphertext, nonce and tag are retained in the workflow. Planning decrypts temporarily to preserve credential redaction on model input/output; execution decrypts for each scenario's login and existing network/redaction checks. Plaintext credentials never enter the model input. Temporary credential objects are cleared in `finally`, including failure paths; encryption/decryption buffers are overwritten after use. Workflow deletion overwrites the encrypted buffers and drops their references. No decrypted credential object or redactor is stored on a pending workflow.
+
+Plaintext strings necessarily exist during active discovery, planning redaction and execution. JavaScript garbage collection cannot guarantee erasure of all string copies. The same-process key does not protect against a fully compromised backend or a memory capture containing both key and ciphertext. This change does not encrypt existing configured-account environment values or modify their fallback behavior. HTTPS is still required for transport encryption; encrypting the temporary store does not enable HTTPS automatically.
+
 ## Deployment boundary
 
 The UI and API must be served on the same origin. The development Vite proxy preserves Host. Foreign origins are rejected rather than allowed through broad CORS configuration. HTTPS must reach Express with a correctly trusted protocol configuration before deploying behind a TLS-terminating proxy; this prototype does not blindly trust forwarded headers. Do not log request bodies, cookies or `X-Auth-Workflow` in external proxies or middleware.
 
-The store and cookie signing key are process-local. Restarts invalidate pending workflows. Multi-process deployment would require a separate design for shared temporary state and ownership; no database, file persistence or session persistence is introduced here. OAuth, MFA and CAPTCHA remain unsupported. Authenticated actions retain the discovery guard's conservative safe-navigation scope.
+The store, encryption key and cookie signing key are process-local. Restarts invalidate pending workflows. Multi-process deployment would require a separate design for shared temporary state and ownership; no database, file persistence or session persistence is introduced here. OAuth, MFA and CAPTCHA remain unsupported. Authenticated actions retain the discovery guard's conservative safe-navigation scope.
 
 ## Verification
 
-All 116 tests passed across 12 suites. `npm run build` and `npm run lint` passed.
+All 120 tests passed across 12 suites after adding temporary credential encryption. `npm run build` and `npm run lint` passed. Encryption regressions cover exact Unicode/whitespace recovery, fresh nonces, tampered ciphertext/nonce/tag, truncated tags, record swapping, changed ownership/origin/expiry bindings, temporary plaintext cleanup, encrypted-buffer cleanup, and safe API rejection before browser or model startup.
 
 Persistent automated tests cover owner/cookie isolation, cross-site rejection, random IDs, fixed expiry and abort, capacity, exact discovery/plan association, origin mismatch, duplicate/replay rejection, cancellation, cleanup on execution/planning failure, and secret-free LLM input/responses. Browser fixtures cover repeated login in fresh contexts, observed navigation, rejected login, external redirects before/after login, cancellation, safe failed-action findings and cleanup. Evaluation has a regression for the authenticated plan marker.
 

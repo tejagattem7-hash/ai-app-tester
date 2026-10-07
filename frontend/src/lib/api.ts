@@ -74,6 +74,10 @@ export function runTests(url: string, plan: TestPlan, workflowId?: string, signa
 }
 
 function workflowErrorMessage(code: unknown): string {
+  if (code === "llm-credit-exhausted") return "AI test planning is unavailable because the API account has no credits. Ask the app owner to add API credits, then start a new test."
+  if (code === "llm-not-configured") return "AI test planning is not configured. Ask the app owner to check the API key and model settings."
+  if (code === "llm-provider-failed") return "The AI provider could not generate a test plan. Please try again later."
+  if (code === "llm-plan-invalid") return "The AI plan did not match the observed application. Start a new test and try again."
   if (typeof code === "string" && code.startsWith("workflow-")) return "This authenticated workflow is unavailable or has expired. Start a new test and sign in again."
   if (code === "authentication-rejected" || code === "authentication-cross-origin-redirect" || code === "session-expired") return discoveryErrorMessage(code, true)
   return "We couldn’t complete authenticated testing. Start a new test and try again."
