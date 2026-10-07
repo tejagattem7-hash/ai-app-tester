@@ -8,19 +8,32 @@ The authenticated control filter rejects `add`, `checkout`, `order` and other mu
 
 ## Opt-in and configuration
 
-1. Configure the backend `TEST_TRANSACTIONAL_ORIGINS` with comma-separated **exact test/demo origins**, including scheme and port. Paths, queries, fragments and embedded credentials are rejected. An empty setting disables transactions. `TEST_AUTH_ORIGIN` and manual credentials do not authorize transactions.
+1. Enable the backend capability once with `TRANSACTIONAL_MODE_ENABLED=true` in the server environment. Missing values, `false`, and values other than the exact string `true` disable it. `.env.example` defaults to `false`. This implementation did not modify `.env`. The former per-site `TEST_TRANSACTIONAL_ORIGINS` setting is ignored; no replacement origin list is needed. `TEST_AUTH_ORIGIN` remains required only for the existing configured-account authentication fallback.
 2. Select **Explore additional pages automatically**, then **Explore transactional test workflows**. The second checkbox starts unchecked and resets when automatic exploration is disabled.
 3. Enable the existing login option when required, using a dedicated test account.
 
-The API equivalent is `{ "url": "https://your-test-app.example/", "transactionalExploration": true }`, optionally with `authenticated: true` and the existing authentication configuration/credential pair. `/api/discover` continues accepting only `url`.
+The API equivalent is `{ "url": "https://your-test-app.example/", "transactionalExploration": true }`, optionally with `authenticated: true` and the existing authentication configuration/credential pair. Without explicit boolean `true`, read-only exploration remains unchanged even when the capability is enabled. `/api/discover` continues accepting only `url`.
 
-For the live SauceDemo checks only, the verification process temporarily configured its test origin. Persistent `.env` configuration was not modified. Reproduce from the repository root using the existing dedicated authentication and planning environment settings:
+Previously, every test origin required a backend environment edit. Now the existing public-URL validation parses the submitted URL and the session derives its exact `URL.origin`. For example, `https://www.saucedemo.com/cart.html` authorizes only `https://www.saucedemo.com`; paths, queries and fragments are excluded. The authorization is activated after initial URL validation/rendering, and after successful login for authenticated exploration. Each request gets a fresh guard. The authorized origin is held only in that browser session's memory, for the existing 60-second overall exploration budget, and revoked immediately during cleanup on success, failure, cancellation or timeout. It is never written to `.env`, a persistent backend allowlist or frontend storage. Observed URLs in result evidence do not authorize later requests.
+
+`GET /api/explore/capabilities` returns only `{ "transactionalModeEnabled": true | false }` with `Cache-Control: no-store`. The frontend starts with the option disabled while checking, enables it only for a valid `true` response, and keeps it disabled on lookup failure. A disabled server displays **Transactional exploration is disabled on this server.** The backend independently checks every opted-in request and returns HTTP 403 with `{ "error": "Transactional exploration is disabled by the server.", "code": "transactional-mode-disabled" }` when disabled.
+
+For the live SauceDemo checks only, the verification process temporarily enabled the global capability in process memory. It used the submitted URL to derive the origin, without an origin allowlist. Persistent `.env` configuration was not modified. Reproduce from the repository root using the existing dedicated authentication and planning environment settings:
 
 ```powershell
 node --env-file-if-exists=.env --import tsx backend/scripts/verify-transactional.ts
 ```
 
 The script contains the SauceDemo URLs solely as verification targets and writes the sanitized evidence to `docs/transactional-verification.json`.
+
+## Exact browser test steps
+
+1. From the repository root, start the backend with the capability disabled: `$env:TRANSACTIONAL_MODE_ENABLED='false'`, then `npm run dev:server`. In a second terminal run `npm run dev`. Open `http://localhost:5173` and select **Explore additional pages automatically**. Confirm the transactional checkbox is disabled and the server-disabled message appears. Read-only exploration remains available.
+2. Stop the backend and restart it in that terminal with `$env:TRANSACTIONAL_MODE_ENABLED='true'`, then `npm run dev:server`. Reload the frontend. Select automatic exploration and confirm the transactional checkbox is available but unchecked. The environment assignment is process-scoped and does not edit `.env`.
+3. Enter `https://www.saucedemo.com/`. Select **This application requires login**, keep **Enter credentials manually**, and enter the dedicated SauceDemo demo account (`standard_user` / `secret_sauce`). Leave transactions unchecked and select **Create test plan**. The read-only result should stay on inventory/menu states; it should not add an item or reach checkout.
+4. Return to **New test** and re-enter the same URL and dedicated login. Select **Explore transactional test workflows** and **Create test plan**. In browser developer tools, the `/api/explore` request must include `transactionalExploration: true`; its response should contain inventory, cart, checkout form/error, checkout summary and completion states. The generated plan should remain review-only.
+5. On New test, enter another public test/demo application URL where you permit state changes. No transactional-origin configuration should be needed. If login is required on that separate origin, use its dedicated manual account; configured-account fallback still retains its existing `TEST_AUTH_ORIGIN` restriction. Only observed supported controls can progress.
+6. Toggle automatic exploration off/on, or reload. Confirm transaction consent resets to unchecked. Check Application → Local Storage: no submitted origin or transactional allowlist is saved. Network → `/api/explore/capabilities` should contain only the capability boolean. Backend regressions verify cross-origin requests never reach the external fixture server and private/non-HTTP/credential URLs fail before browser startup.
 
 ## Architecture and boundaries
 
@@ -30,9 +43,9 @@ The walker records the exact control and its deterministic fills with each trans
 
 Server-owned transactional limits are **10 states, depth 8, 20 interactions, 20 attempts and 60 seconds overall**. Login, fills and submissions share the interaction/deadline budget. Entry login search retains its original five-state/depth-two bounds. Cleanup closes the page, context and browser and releases capacity on success, failure, cancellation and timeout. Read-only protected exploration retains five states/depth two/20 interactions/60 seconds.
 
-Allowed workflow intents are Add to cart, Remove from cart, Cart, Checkout, Continue/Next, Back/Previous/Continue shopping, and Finish, only in the applicable observed phase. Destructive, account, messaging, publishing, invitation, transfer, purchase/payment, password/security and logout controls/destinations remain blocked. An origin allowlist by itself does not authorize any generic mutation.
+Allowed workflow intents are Add to cart, Remove from cart, Cart, Checkout, Continue/Next, Back/Previous/Continue shopping, and Finish, only in the applicable observed phase. Destructive, account, messaging, publishing, invitation, transfer, purchase/payment, password/security and logout controls/destinations remain blocked. Session origin authorization by itself does not authorize any generic mutation.
 
-All requests remain on the configured origin and retain public-URL/DNS/SSRF validation. WebSockets, service workers, popups, dialogs and downloads retain their guards. Redirects in authenticated sessions are checked one hop at a time; credential/form bodies are never replayed to redirect targets. A new form exception permits **one POST to the exact live form action with exactly the approved deterministic field names/values**. Arbitrary POST/PUT/PATCH/DELETE requests, extra body keys, duplicate keys, financial destinations and external requests are blocked.
+All transactional requests remain on the validated submitted URL's exact origin and retain public-URL/DNS/SSRF validation. Candidate selection, navigation checks and request routing reject different schemes, hosts or ports, including subdomains and payment providers. Transactional network exceptions require the activated session origin to match as well; they cannot authorize a cross-origin form action or request. WebSockets, service workers, popups, dialogs and downloads retain their guards. Redirects in authenticated sessions are checked one hop at a time; credential/form bodies are never replayed to redirect targets. The existing form exception permits **one POST to the exact live form action with exactly the approved deterministic field names/values**. Arbitrary POST/PUT/PATCH/DELETE requests, extra body keys, duplicate keys, financial destinations and external requests are blocked.
 
 Forms must belong to the observed workflow and contain only supported non-sensitive fields. First name, last name, full name, postal code, address, city and state fields use fixed placeholders (`Test`, `User`, `Test User`, `00000`, `123 Test Street`, `Testville`, `Test State`). Values never come from an LLM. Payment/bank/SSN/password/security fields, unknown fields, hidden fields, disabled fields and unsupported select/check controls prevent submission. An empty-form attempt is made only when all eligible fields are empty; browser validation bubbles without a semantic page change are not reported as observed validation states.
 
@@ -69,22 +82,20 @@ These scenarios **cannot execute through Run tests yet**. The backend marks plan
 
 ## Verification and remaining limits
 
-Safety coverage includes default-off behavior, explicit boolean opt-in, exact origin configuration, allowed actions, destructive/external blocking, sensitive fields, deterministic data, single exact form POSTs, state/depth/interaction/deadline bounds, browser cleanup, planner rejection and review-only execution. The frontend browser smoke checked checkbox defaults/reset, explicit request payload and disabled execution/reason.
+Safety coverage includes a globally disabled capability, explicit boolean opt-in, exact request-derived origin, authorization delayed until successful login, public URL rejection before browser launch, no `.env`/frontend-storage persistence, cleanup revocation, same-origin POST allowance and cross-origin mutation blocking. Existing allowed-action, destructive/external, sensitive-field, deterministic-data, single exact form POST, state/depth/interaction/deadline, browser-cleanup, planner and review-only execution tests remain in place. The frontend browser smoke checked disabled/enabled/unavailable capabilities, checkbox defaults and toggle/reload reset, explicit request payloads for two public origins, controlled server errors, and no origin storage.
 
-All four requested checks passed: `npx tsc -b --pretty false`, `npm run lint`, `npm run build`, and the full backend suite (**134 passed, 0 failed, 15 suites**). Windows required approved process launches for Playwright/esbuild; the full suite passed with two workers after one existing browser launch returned EPERM under concurrent browser load. The exact commands and results are recorded in the verification JSON.
+All four requested checks passed: `npx tsc -b --pretty false`, `npm run lint`, `npm run build`, and the full backend suite (**147 passed, 0 failed, 15 suites**). The focused configuration/safety suite also passed all 59 tests. Windows required approved process launches for Playwright/esbuild; the full suite used two workers. A before/after SHA-256 comparison confirmed `.env` was unchanged. The exact commands and results are recorded in the verification JSON.
 
 This is a conservative cart/checkout explorer, not a general transaction engine. Backend cart APIs whose payloads were not safely derived from a live form remain blocked. Hidden CSRF inputs, native GET submissions, payment flows, unknown fields, external assets and nonstandard control labels can stop exploration. Only the actually observed first-name validation is claimed; last-name/postal-code negative validation was not separately observed. Long paths may exceed the planner's existing 12-action limit. Mutable state is not reset or replayed between branches. Transactional execution needs a separate origin-restricted executor, unambiguous control replay and an application-specific test-state reset contract.
 
-## Files changed
+## Files changed for the configuration improvement
 
 | Area | Exact paths |
 | --- | --- |
 | Configuration | `.env.example`; `backend/src/config/transactional.ts` |
 | Safety/network/exploration | `backend/src/utils/transactional-safety.ts`; `backend/src/services/discovery.service.ts`; `backend/src/services/exploration.service.ts`; `backend/src/routes/explore.route.ts` |
-| Schemas | `backend/src/schemas/discover.schema.ts`; `backend/src/schemas/exploration-result.schema.ts`; `backend/src/schemas/test-plan.schema.ts` |
-| Planning/execution guards | `backend/src/services/test-planning.service.ts`; `backend/src/services/test-execution.service.ts`; `backend/src/services/authenticated-execution.service.ts`; `backend/src/services/auth-workflow.service.ts` |
-| Frontend | `frontend/src/pages/NewTestPage.tsx`; `frontend/src/pages/TestPlanPage.tsx`; `frontend/src/pages/TestRunningPage.tsx`; `frontend/src/lib/api.ts`; `frontend/src/lib/discovery-errors.ts`; `frontend/src/types/planning.ts` |
-| Tests/verification | `backend/test/transactional-exploration.test.ts`; `backend/test/authenticated-exploration.test.ts`; `backend/scripts/verify-transactional.ts` |
+| Frontend | `frontend/src/pages/NewTestPage.tsx`; `frontend/src/lib/api.ts`; `frontend/src/lib/discovery-errors.ts` |
+| Tests/verification | `backend/test/transactional-exploration.test.ts`; `backend/test/app.test.ts`; `backend/test/discovery-errors.test.ts`; `backend/scripts/verify-transactional.ts` |
 | Documentation | `README.md`; `docs/transactional-exploration.md`; `docs/transactional-verification.json` |
 
-The user's pre-existing authentication example edits were preserved; `.env.example` only gained the empty transactional-origin setting. `AppLayout.tsx` required no changes.
+The user's pre-existing authentication example edits were preserved. `.env.example` replaces the transactional-origin setting with `TRANSACTIONAL_MODE_ENABLED=false`. `.env` and `AppLayout.tsx` were not changed.

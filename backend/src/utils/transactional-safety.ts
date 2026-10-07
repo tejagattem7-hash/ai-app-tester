@@ -8,6 +8,9 @@ export type TransactionalIntent = "add-to-cart" | "remove-from-cart" | "cart" | 
 export type TransactionalPhase = "catalog" | "cart-ready" | "cart" | "details" | "summary" | "complete"
 export interface TestFill { target: string; value: string }
 export interface TransactionalNetworkGuard {
+  // Set only from the session's validated initial URL, after successful login
+  // when authentication is requested. Never stored outside this session.
+  authorizedOrigin?: string
   phase: TransactionalPhase
   activeIntent?: TransactionalIntent
   approvedPost?: { url: string; fields: Record<string, string> }
@@ -68,14 +71,14 @@ export function deterministicTestValue(field: { type: string; name?: string | nu
 
 export function allowsTransactionalRead(url: URL, guard: TransactionalNetworkGuard): boolean {
   // Never exempt destructive destinations, including misleading checkout labels.
-  return guard.phase !== "catalog" && !url.search && !url.hash
+  return guard.authorizedOrigin === url.origin && guard.phase !== "catalog" && !url.search && !url.hash
     && !hasForbiddenTransactionalIntent(url.pathname)
     && /\b(cart|basket|checkout|order|summary|confirmation|complete)\b/.test(words(url.pathname))
 }
 
 export function allowsTransactionalPost(url: URL, body: string | null, guard: TransactionalNetworkGuard): boolean {
   const approved = guard.approvedPost
-  if (!guard.activeIntent || guard.postUsed || !approved || approved.url !== url.href || !body || hasForbiddenTransactionalIntent(url.pathname)) return false
+  if (guard.authorizedOrigin !== url.origin || !guard.activeIntent || guard.postUsed || !approved || approved.url !== url.href || !body || hasForbiddenTransactionalIntent(url.pathname)) return false
   let entries: [string, unknown][]
   try {
     const parsed: unknown = JSON.parse(body)

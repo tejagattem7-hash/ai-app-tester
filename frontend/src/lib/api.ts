@@ -50,6 +50,16 @@ export function discoverPage(url: string): Promise<DiscoveryResult> {
   return postJson<DiscoveryResult>("/api/discover", { url }, (code) => discoveryErrorMessage(code))
 }
 
+export async function getExplorationCapabilities(signal?: AbortSignal): Promise<{ transactionalModeEnabled: boolean }> {
+  const response = await fetch("/api/explore/capabilities", { cache: "no-store", signal })
+  if (!response.ok) throw new Error("Unable to check transactional exploration availability.")
+  const body: unknown = await response.json()
+  if (!body || typeof body !== "object" || !("transactionalModeEnabled" in body) || typeof body.transactionalModeEnabled !== "boolean") {
+    throw new Error("Unable to check transactional exploration availability.")
+  }
+  return { transactionalModeEnabled: body.transactionalModeEnabled }
+}
+
 export function exploreApplication(url: string, authenticated = false, credentials?: { username: string; password: string }, onWorkflow?: (id: string) => void, signal?: AbortSignal, transactionalExploration = false): Promise<ExplorationResult> {
   return postJson<ExplorationResult>("/api/explore", { url, authenticated, ...(transactionalExploration ? { transactionalExploration: true } : {}), ...(authenticated ? credentials : undefined) },
     (code) => discoveryErrorMessage(code, authenticated, credentials ? "manual" : "configured"), { onWorkflow, signal })

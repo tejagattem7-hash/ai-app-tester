@@ -161,6 +161,7 @@ export interface DiscoverySession {
   remainingTimeMs(): number
   authentication?: AuthenticationNetworkGuard
   transactional?: TransactionalNetworkGuard
+  authorizeTransactional?(): void
   followValidatedRedirect?(): Promise<void>
 }
 
@@ -261,7 +262,7 @@ export async function withDiscoverySession<T>(
           || isExternalAuthenticationControl(requestUrl.pathname))) return await route.abort("blockedbyclient")
         const loginPost = auth && request.method() === "POST" && allowsLoginPost(auth, requestUrl, request.postData())
         const transactional = options.transactional
-        // An origin allowlist never authorizes arbitrary mutations. Only one POST
+        // Session origin authorization never permits arbitrary mutations. One POST
         // to the live form action, with exactly its approved test values, may pass.
         const testPost = transactional && requestUrl.origin === initialUrl.origin && request.method() === "POST"
           && allowsTransactionalPost(requestUrl, request.postData(), transactional)
@@ -371,7 +372,15 @@ export async function withDiscoverySession<T>(
     if (options.sameOriginOnly && new URL(page.url()).origin !== initialUrl.origin) {
       throw new DiscoveryNavigationError("Navigation left the starting origin")
     }
-    return inspect({ page, initialUrl, remainingTimeMs, authentication: options.authentication, transactional: options.transactional, followValidatedRedirect })
+    const authorizeTransactional = () => {
+      if (expired) throw new DiscoveryBudgetError()
+      if (!options.sameOriginOnly || !options.transactional || (options.authentication && !options.authentication.authenticated)) {
+        throw new DiscoveryNavigationError("Transactional authorization requires a validated session and successful authentication")
+      }
+      options.transactional.authorizedOrigin = initialUrl.origin
+    }
+    return inspect({ page, initialUrl, remainingTimeMs, authentication: options.authentication, transactional: options.transactional,
+      authorizeTransactional: options.transactional ? authorizeTransactional : undefined, followValidatedRedirect })
   }
 
   try {
@@ -399,6 +408,13 @@ export async function withDiscoverySession<T>(
     throw new DiscoveryNavigationError(error instanceof Error ? error.message : "Unable to inspect the page")
   } finally {
     expired = true
+    // Revoke the in-memory capability on completion, failure, cancellation and
+    // expiry, including any guard still held by an in-flight request callback.
+    if (options.transactional) {
+      options.transactional.authorizedOrigin = undefined
+      options.transactional.activeIntent = undefined
+      options.transactional.approvedPost = undefined
+    }
     if (onAbort) options.signal?.removeEventListener("abort", onAbort)
     if (timer) clearTimeout(timer)
     // Each cleanup runs even if the previous one fails; capacity is always released.

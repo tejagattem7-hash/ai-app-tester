@@ -1,9 +1,11 @@
 import assert from "node:assert/strict"
 import { createServer, type Server } from "node:http"
+import { createHash } from "node:crypto"
+import { readFile } from "node:fs/promises"
 import type { AddressInfo } from "node:net"
 import { after, before, beforeEach, describe, it } from "node:test"
 import { chromium, type Browser, type Page } from "playwright"
-import { assertTransactionalOrigin, MAX_TRANSACTIONAL_DEPTH, MAX_TRANSACTIONAL_STATES, TransactionalExplorationError } from "../src/config/transactional.js"
+import { assertTransactionalModeEnabled, isTransactionalModeEnabled, MAX_TRANSACTIONAL_DEPTH, MAX_TRANSACTIONAL_STATES, TransactionalExplorationError } from "../src/config/transactional.js"
 import { discoverRequestSchema, exploreRequestSchema } from "../src/schemas/discover.schema.js"
 import { explorationResultSchema, type ExplorationResult } from "../src/schemas/exploration-result.schema.js"
 import type { TestAction, TestPlan } from "../src/schemas/test-plan.schema.js"
@@ -12,7 +14,8 @@ import { DiscoveryBudgetError, withDiscoverySession, type DiscoveryDependencies 
 import { createTestPlan, InvalidTestPlanError } from "../src/services/test-planning.service.js"
 import { AuthenticatedExecutionUnavailableError, executeTestRun } from "../src/services/test-execution.service.js"
 import { AuthWorkflowStore, WorkflowError } from "../src/services/auth-workflow.service.js"
-import { allowsTransactionalPost, deterministicTestValue, transactionalIntent } from "../src/utils/transactional-safety.js"
+import { allowsTransactionalPost, allowsTransactionalRead, deterministicTestValue, transactionalIntent, type TransactionalNetworkGuard } from "../src/utils/transactional-safety.js"
+import { assertPublicHttpUrl, PublicUrlError } from "../src/utils/public-url.js"
 
 let server: Server
 let origin: string
@@ -20,7 +23,11 @@ let documents: Record<string, string>
 let requests: { path: string; method: string; body: string }[]
 let browser: Browser | undefined
 let pages: Page[]
+let externalServer: Server
+let externalOrigin: string
+let externalRequests: number
 const previousOrigins = process.env.TEST_TRANSACTIONAL_ORIGINS
+const previousEnabled = process.env.TRANSACTIONAL_MODE_ENABLED
 const USER = "synthetic-test-user"
 const PASSWORD = "synthetic-test-password"
 
@@ -39,14 +46,22 @@ before(async () => {
   }).listen(0, "127.0.0.1")
   await new Promise<void>((resolve) => server.once("listening", resolve))
   origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+  externalServer = createServer((_request, response) => { externalRequests += 1; response.end("Unexpected external request") }).listen(0, "127.0.0.1")
+  await new Promise<void>((resolve) => externalServer.once("listening", resolve))
+  externalOrigin = `http://127.0.0.1:${(externalServer.address() as AddressInfo).port}`
 })
 after(async () => {
   if (previousOrigins === undefined) delete process.env.TEST_TRANSACTIONAL_ORIGINS
   else process.env.TEST_TRANSACTIONAL_ORIGINS = previousOrigins
+  if (previousEnabled === undefined) delete process.env.TRANSACTIONAL_MODE_ENABLED
+  else process.env.TRANSACTIONAL_MODE_ENABLED = previousEnabled
   await new Promise<void>((resolve) => server.close(() => resolve()))
+  await new Promise<void>((resolve) => externalServer.close(() => resolve()))
 })
 beforeEach(() => {
-  process.env.TEST_TRANSACTIONAL_ORIGINS = origin
+  delete process.env.TEST_TRANSACTIONAL_ORIGINS
+  process.env.TRANSACTIONAL_MODE_ENABLED = "true"
+  externalRequests = 0
   requests = []; browser = undefined; pages = []
   documents = {
     "/login": `<h1>Sign in</h1><form onsubmit="event.preventDefault();sessionStorage.setItem('session','synthetic-token');location='/catalog'">
@@ -97,17 +112,28 @@ describe("transactional safety policy", () => {
     assert.equal(exploreRequestSchema.safeParse({ url: origin, transactionalExploration: "true" }).success, false)
     assert.equal(discoverRequestSchema.safeParse({ url: origin, transactionalExploration: true }).success, false)
   })
-  it("requires an exact configured test origin, including port, before launching", async () => {
-    delete process.env.TEST_TRANSACTIONAL_ORIGINS
-    await assert.rejects(explore, TransactionalExplorationError)
-    assert.equal(browser, undefined)
-    for (const value of [`${origin}/path`, `${origin}?test=true`, "https://other.example", "not-a-url", "https://user:secret@example.com"]) {
-      process.env.TEST_TRANSACTIONAL_ORIGINS = value
-      assert.throws(() => assertTransactionalOrigin(origin), TransactionalExplorationError)
+  it("requires the exact global capability value true before launching, even with a legacy allowlist", async () => {
+    process.env.TEST_TRANSACTIONAL_ORIGINS = origin
+    for (const value of [undefined, "", "false", "TRUE", "1", "yes", " true "]) {
+      if (value === undefined) delete process.env.TRANSACTIONAL_MODE_ENABLED
+      else process.env.TRANSACTIONAL_MODE_ENABLED = value
+      assert.equal(isTransactionalModeEnabled(), false)
+      assert.throws(assertTransactionalModeEnabled, TransactionalExplorationError)
+      await assert.rejects(explore, TransactionalExplorationError)
+      assert.equal(browser, undefined)
     }
-    process.env.TEST_TRANSACTIONAL_ORIGINS = `https://other.example, ${origin}`
-    assert.doesNotThrow(() => assertTransactionalOrigin(origin))
-    assert.throws(() => assertTransactionalOrigin("http://127.0.0.1:1"), TransactionalExplorationError)
+    delete process.env.TEST_TRANSACTIONAL_ORIGINS
+    process.env.TRANSACTIONAL_MODE_ENABLED = "true"
+    assert.equal(isTransactionalModeEnabled(), true)
+    assert.doesNotThrow(assertTransactionalModeEnabled)
+  })
+  it("still rejects private, non-HTTP and credential-bearing URLs before browser launch", async () => {
+    let launched = false
+    const productionValidation: DiscoveryDependencies = { validateUrl: assertPublicHttpUrl, async launchBrowser() { launched = true; throw new Error("Unexpected launch") } }
+    for (const url of ["http://127.0.0.1", "http://10.0.0.1", "http://169.254.169.254", "http://[::1]", "http://localhost", "file:///etc/passwd", "https://user:password@example.com"]) {
+      await assert.rejects(() => exploreApplication(url, productionValidation, { transactionalExploration: true }), PublicUrlError)
+    }
+    assert.equal(launched, false)
   })
   it("recognizes only bounded workflow intents and rejects destructive labels and external links", () => {
     assert.equal(transactionalIntent({ kind: "button", text: "Add to cart" }, origin, "catalog"), "add-to-cart")
@@ -132,7 +158,7 @@ describe("transactional safety policy", () => {
     assert.equal(deterministicTestValue({ type: "text", label: "First Name", autocomplete: "cc-name" }), undefined)
   })
   it("allows one exact form POST and rejects arbitrary endpoints, data and duplicate keys", () => {
-    const guard = { phase: "details" as const, activeIntent: "continue" as const, approvedPost: { url: `${origin}/checkout-data`, fields: { firstName: "Test" } } }
+    const guard = { authorizedOrigin: origin, phase: "details" as const, activeIntent: "continue" as const, approvedPost: { url: `${origin}/checkout-data`, fields: { firstName: "Test" } } }
     for (const body of ['{"firstName":"Real Person"}', '{"firstName":"Test","card":"1234"}', "firstName=Test&firstName=Test"]) {
       assert.equal(allowsTransactionalPost(new URL(guard.approvedPost.url), body, guard), false)
     }
@@ -140,10 +166,78 @@ describe("transactional safety policy", () => {
     assert.equal(allowsTransactionalPost(new URL(guard.approvedPost.url), '{"firstName":"Test"}', guard), true)
     assert.equal(allowsTransactionalPost(new URL(guard.approvedPost.url), '{"firstName":"Test"}', guard), false)
   })
+  it("requires active exact-origin authorization, including scheme, host and port, for mutations and checkout reads", () => {
+    const guard: TransactionalNetworkGuard = { phase: "details", activeIntent: "continue", approvedPost: { url: `${origin}/checkout-data`, fields: { firstName: "Test" } } }
+    assert.equal(allowsTransactionalPost(new URL(guard.approvedPost!.url), "firstName=Test", guard), false)
+    assert.equal(allowsTransactionalRead(new URL(`${origin}/checkout-details`), guard), false)
+    guard.authorizedOrigin = origin
+    assert.equal(allowsTransactionalRead(new URL(`${origin}/checkout-details`), guard), true)
+    for (const other of [externalOrigin, "https://example.com", "https://other.example.com", origin.replace("http:", "https:")]) {
+      guard.approvedPost!.url = `${other}/checkout-data`
+      assert.equal(allowsTransactionalPost(new URL(guard.approvedPost!.url), "firstName=Test", guard), false)
+      assert.equal(allowsTransactionalRead(new URL(`${other}/checkout-details`), guard), false)
+    }
+  })
 })
 
 describe("controlled transactional browser exploration", () => {
+  it("authorizes the validated URL.origin only in session memory and revokes it during cleanup", async () => {
+    const snapshot = async () => readFile(new URL("../../.env", import.meta.url)).then((bytes) => createHash("sha256").update(bytes).digest("hex"))
+      .catch((error: unknown) => { if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return "absent"; throw error })
+    const envBefore = await snapshot()
+    const guard: TransactionalNetworkGuard = { phase: "catalog" }
+    let authorize: (() => void) | undefined
+    await withDiscoverySession(`${origin}/catalog?view=demo#section`, async (session) => {
+      assert.equal(guard.authorizedOrigin, undefined)
+      authorize = session.authorizeTransactional
+      authorize!()
+      assert.equal(guard.authorizedOrigin, origin)
+      assert.equal(process.env.TEST_TRANSACTIONAL_ORIGINS, undefined)
+      assert.equal(await session.page.evaluate((value) => Object.values(localStorage).some((item: string) => item.includes(value)), origin), false)
+    }, { sameOriginOnly: true, transactional: guard }, dependencies)
+    assert.equal(guard.authorizedOrigin, undefined)
+    assert.throws(() => authorize!(), DiscoveryBudgetError)
+    assert.equal(await snapshot(), envBefore)
+    assert.equal(process.env.TEST_TRANSACTIONAL_ORIGINS, undefined)
+    assert.equal(process.env.TRANSACTIONAL_MODE_ENABLED, "true")
+    assertClosed()
+  })
+  it("does not authorize transactional requests before authentication succeeds", async () => {
+    const guard: TransactionalNetworkGuard = { phase: "details", activeIntent: "continue", approvedPost: { url: `${origin}/checkout-data`, fields: { firstName: "Test" } } }
+    await withDiscoverySession(`${origin}/login`, async (session) => {
+      assert.equal(guard.authorizedOrigin, undefined)
+      assert.throws(() => session.authorizeTransactional!(), /successful authentication/)
+      await session.page.evaluate(() => fetch("/checkout-data", { method: "POST", body: "firstName=Test" }).catch(() => {}))
+      assert.equal(requests.some((request) => request.method === "POST"), false)
+    }, { sameOriginOnly: true, transactional: guard, authentication: {
+      authenticated: false, submissionActive: false, loginRequestUsed: false, rejected: false, sessionExpired: false, redirectedToLogin: false, username: USER, password: PASSWORD,
+    } }, dependencies)
+    assert.equal(guard.authorizedOrigin, undefined)
+    assertClosed()
+    let authorized: TransactionalNetworkGuard | undefined
+    await exploreApplication(`${origin}/login`, dependencies, { authenticated: true, credentials: { username: USER, password: PASSWORD }, transactionalExploration: true,
+      async inspectAuthenticated(session) {
+        assert.equal(session.authentication?.authenticated, true)
+        assert.equal(session.transactional?.authorizedOrigin, origin)
+        authorized = session.transactional
+      },
+    })
+    assert.ok(authorized)
+    assert.equal(authorized.authorizedOrigin, undefined)
+    assertClosed()
+  })
+  it("keeps both read-only modes unchanged when the capability is off or consent is absent", async () => {
+    for (const enabled of ["false", "true"]) {
+      process.env.TRANSACTIONAL_MODE_ENABLED = enabled
+      const result = await exploreApplication(`${origin}/catalog`, dependencies)
+      assert.equal(result.transactionalExploration, undefined)
+      assert.equal(result.transitions.some((edge) => /add to cart|checkout/i.test(edge.control.text)), false)
+      assert.deepEqual(result.limits, { maxPages: 5, maxDepth: 2, timeoutMs: 60000, maxInteractions: 20 })
+      assertClosed()
+    }
+  })
   it("preserves the authenticated read-only default and its original limits", async () => {
+    process.env.TRANSACTIONAL_MODE_ENABLED = "false"
     const result = await exploreApplication(`${origin}/login`, dependencies, { authenticated: true, credentials: { username: USER, password: PASSWORD } })
     assert.equal(result.transactionalExploration, undefined)
     assert.ok(result.pages.every((page) => ["/catalog", "/cart.html"].includes(new URL(page.url).pathname)))
@@ -202,6 +296,15 @@ describe("controlled transactional browser exploration", () => {
     assert.deepEqual(requests.filter((request) => request.method === "POST").map((request) => request.body), ["firstName=Test"])
     assertClosed()
   })
+  it("blocks a cross-origin mutation even when an allowed Continue control supplies safe form data", async () => {
+    documents["/checkout-details"] = `<h1>Details</h1><form action="/checkout-data" method="post" onsubmit="event.preventDefault();fetch('${externalOrigin}/checkout-data',{method:'POST',body:'firstName=Test'}).catch(()=>{})"><label>First Name<input name="firstName" required></label><button>Continue</button></form>`
+    const result = await explore(true)
+    assert.ok(result.pages.every((page) => new URL(page.url).origin === origin))
+    assert.equal(result.pages.some((page) => page.url.endsWith("/summary")), false)
+    assert.equal(externalRequests, 0)
+    assert.equal(requests.some((request) => request.method === "POST"), false)
+    assertClosed()
+  })
   it("enforces depth limits for an indefinitely progressing workflow", async () => {
     documents["/checkout-details"] = '<h1>Details</h1><button onclick="location=\'/step-0\'">Continue</button>'
     for (let index = 0; index < 20; index += 1) documents[`/step-${index}`] = `<h1>Step ${index}</h1><button onclick="location='/step-${index + 1}'">Continue</button>`
@@ -231,8 +334,10 @@ describe("controlled transactional browser exploration", () => {
     assertClosed()
   })
   it("retains the shared overall deadline and cleans up a hanging transactional session", async () => {
-    await assert.rejects(() => withDiscoverySession(`${origin}/catalog`, () => new Promise(() => {}),
-      { sameOriginOnly: true, transactional: { phase: "catalog" }, timeoutMs: 2000 }, dependencies), DiscoveryBudgetError)
+    const guard: TransactionalNetworkGuard = { phase: "catalog" }
+    await assert.rejects(() => withDiscoverySession(`${origin}/catalog`, (session) => { session.authorizeTransactional!(); return new Promise(() => {}) },
+      { sameOriginOnly: true, transactional: guard, timeoutMs: 2000 }, dependencies), DiscoveryBudgetError)
+    assert.equal(guard.authorizedOrigin, undefined)
     assertClosed()
   })
   it("rejects widened read-only response limits without explicit mode metadata", async () => {

@@ -68,7 +68,9 @@ See [architecture, security boundaries, exact observations and manual instructio
 
 ## Optional transactional test-workflow exploration
 
-Read-only exploration remains the default. **Explore transactional test workflows** is a separate, unchecked option under automatic exploration. `POST /api/explore` accepts `transactionalExploration: true`, with or without the existing authentication options. This mode requires the starting origin in the backend's comma-separated `TEST_TRANSACTIONAL_ORIGINS`; each entry must be an exact HTTP(S) origin without a path, query, fragment or credentials. An empty setting disables the mode. Authentication-origin configuration alone does not authorize transactions. Configure only test/demo applications whose state may be changed.
+Read-only exploration remains the default. **Explore transactional test workflows** is a separate, unchecked option under automatic exploration. Set the backend capability `TRANSACTIONAL_MODE_ENABLED=true` once to make this option available; it defaults to disabled. `POST /api/explore` still requires explicit `transactionalExploration: true`, with or without the existing authentication options. The backend validates the submitted public URL and derives its exact `URL.origin` for this session only. Authenticated sessions activate that authorization only after successful login. No per-site transactional configuration is required: the former `TEST_TRANSACTIONAL_ORIGINS` setting is ignored. Use only test/demo applications whose state may be changed.
+
+`GET /api/explore/capabilities` reports `{ "transactionalModeEnabled": true | false }` with caching disabled. New test uses it to disable the unchecked option and display **Transactional exploration is disabled on this server.** when unavailable. Opted-in requests to a disabled server return HTTP 403 with code `transactional-mode-disabled`. The derived origin stays in request/session memory and is revoked during cleanup; it is never saved to `.env`, a disk allowlist or frontend storage. Scheme, host and port must match for every allowed transactional request; existing SSRF, mutation and sensitive-field filters still apply.
 
 The generic explorer follows observed Add to cart → Cart → Checkout → Continue → Finish controls, including accessible role-button icons, using the same browser context. It does not contain application-specific routes, selectors, products or credentials. It fills only recognized non-sensitive test fields, with deterministic placeholder values; payment, account, security, hidden and unknown fields stop submission. An empty-form attempt is recorded only when it changes observed page metadata. Mutation requests remain blocked except for one POST to a checked live form action containing exactly its approved test fields. External requests, destructive controls, WebSockets, popups and downloads remain blocked.
 
@@ -78,7 +80,17 @@ See [transactional architecture, safety and live results](docs/transactional-exp
 
 ## AI test planning
 
-Set `OPENAI_API_KEY` and `OPENAI_MODEL` in the server process environment (see `.env.example` for the required names). `POST /api/test-plans` accepts the complete JSON response from `/api/discover` or `/api/explore` and returns the identified page purpose plus a complexity-based set of 1–15 validated test scenarios. It aims for at least three when that many meaningful, non-duplicate tests exist. It uses recorded transitions to plan workflows across observed states and never assumes that advertised or authenticated capabilities were reached. It creates plans only; it does not execute actions.
+Set `OPENAI_API_KEY` and `OPENAI_MODEL` in the gitignored root `.env` (see `.env.example` for placeholders). `npm run dev:server` loads this file into the backend only. Test planning uses the official `openai` Node SDK and OpenAI Responses API with structured output validated by the existing Zod schema. Both settings are required; there is no default model. Use an OpenAI model ID that supports structured outputs, without a provider prefix. Custom `OPENAI_BASE_URL` overrides are rejected. SDK logging is disabled, and provider failures return fixed messages without raw SDK errors or credentials.
+
+`POST /api/test-plans` accepts the complete JSON response from `/api/discover` or `/api/explore` and returns the identified page purpose plus a complexity-based set of 1–15 validated test scenarios. It aims for at least three when that many meaningful, non-duplicate tests exist. It uses recorded transitions to plan workflows across observed states and never assumes that advertised or authenticated capabilities were reached. It creates plans only; it does not execute actions.
+
+With the backend running, test discovery followed by planning in PowerShell:
+
+```powershell
+$discovery = Invoke-RestMethod -Method Post -Uri 'http://localhost:3001/api/discover' -ContentType 'application/json' -Body '{ "url": "https://www.saucedemo.com/" }'
+$plan = Invoke-RestMethod -Method Post -Uri 'http://localhost:3001/api/test-plans' -ContentType 'application/json' -Body ($discovery | ConvertTo-Json -Depth 30 -Compress)
+$plan | ConvertTo-Json -Depth 30
+```
 
 ## Verify
 

@@ -164,6 +164,7 @@ export async function createTestPlan(
 ): Promise<TestPlan> {
   // A second secret boundary protects even client-supplied planning metadata.
   const redactor = workflowRedactor ?? configuredSecretRedactor()
+  redactor.add(process.env.OPENAI_API_KEY?.trim() ?? "")
   const authenticated = "pages" in discovery && !!discovery.authentication
   discovery = redactor.sanitize(discovery, authenticated)
   const rawPlan = await provider.generateTestPlan({

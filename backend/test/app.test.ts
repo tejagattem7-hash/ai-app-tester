@@ -19,6 +19,58 @@ after(() => new Promise<void>((resolve, reject) => {
 }))
 
 describe("API basics", () => {
+  it("reports the global transactional capability without origins or configuration details", async () => {
+    const original = process.env.TRANSACTIONAL_MODE_ENABLED
+    try {
+      for (const [value, enabled] of [[undefined, false], ["false", false], ["TRUE", false], ["true", true]] as const) {
+        if (value === undefined) delete process.env.TRANSACTIONAL_MODE_ENABLED
+        else process.env.TRANSACTIONAL_MODE_ENABLED = value
+        const response = await fetch(`${baseUrl}/api/explore/capabilities`)
+        assert.equal(response.status, 200)
+        assert.equal(response.headers.get("cache-control"), "no-store")
+        assert.deepEqual(await response.json(), { transactionalModeEnabled: enabled })
+      }
+    } finally {
+      if (original === undefined) delete process.env.TRANSACTIONAL_MODE_ENABLED
+      else process.env.TRANSACTIONAL_MODE_ENABLED = original
+    }
+  })
+  it("rejects opted-in requests with a controlled disabled error before credentials or browser startup", async () => {
+    const original = process.env.TRANSACTIONAL_MODE_ENABLED
+    delete process.env.TRANSACTIONAL_MODE_ENABLED
+    const launch = mock.method(chromium, "launch", async () => { throw new Error("Unexpected browser launch") })
+    try {
+      for (const authenticated of [false, true]) {
+        const response = await fetch(`${baseUrl}/api/explore`, { method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ url: "https://example.com/path", transactionalExploration: true, authenticated }),
+        })
+        assert.equal(response.status, 403)
+        assert.deepEqual(await response.json(), { error: "Transactional exploration is disabled by the server.", code: "transactional-mode-disabled" })
+      }
+      assert.equal(launch.mock.callCount(), 0)
+    } finally {
+      launch.mock.restore()
+      if (original === undefined) delete process.env.TRANSACTIONAL_MODE_ENABLED
+      else process.env.TRANSACTIONAL_MODE_ENABLED = original
+    }
+  })
+  it("requires public URL validation for opted-in requests even when the global capability is enabled", async () => {
+    const original = process.env.TRANSACTIONAL_MODE_ENABLED
+    process.env.TRANSACTIONAL_MODE_ENABLED = "true"
+    const launch = mock.method(chromium, "launch", async () => { throw new Error("Unexpected browser launch") })
+    try {
+      for (const url of ["http://localhost", "http://10.0.0.1", "http://169.254.169.254", "http://[::1]", "file:///etc/passwd", "https://user:secret@example.com"]) {
+        const response = await fetch(`${baseUrl}/api/explore`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ url, transactionalExploration: true }) })
+        assert.equal(response.status, 400)
+        assert.equal((await response.json() as { code: string }).code, "invalid-url")
+      }
+      assert.equal(launch.mock.callCount(), 0)
+    } finally {
+      launch.mock.restore()
+      if (original === undefined) delete process.env.TRANSACTIONAL_MODE_ENABLED
+      else process.env.TRANSACTIONAL_MODE_ENABLED = original
+    }
+  })
   it("reports health", async () => {
     const response = await fetch(`${baseUrl}/api/health`)
     assert.equal(response.status, 200)

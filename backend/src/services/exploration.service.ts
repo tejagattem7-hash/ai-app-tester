@@ -5,7 +5,7 @@ import { EXPLORATION_ACTION_TIMEOUT_MS, EXPLORATION_TIMEOUT_MS, MAX_EXPLORATION_
 import { explorationResultSchema, type ExploredPage, type ExplorationResult, type NavigationControl } from "../schemas/exploration-result.schema.js"
 import { isExternalAuthenticationControl, isSafeAuthenticatedNavigationControl, isSafeNavigationControl } from "../utils/exploration-safety.js"
 import { SecretRedactor } from "../utils/secret-redaction.js"
-import { assertTransactionalOrigin, MAX_TRANSACTIONAL_DEPTH, MAX_TRANSACTIONAL_INTERACTIONS, MAX_TRANSACTIONAL_STATES, TRANSACTIONAL_TIMEOUT_MS } from "../config/transactional.js"
+import { assertTransactionalModeEnabled, MAX_TRANSACTIONAL_DEPTH, MAX_TRANSACTIONAL_INTERACTIONS, MAX_TRANSACTIONAL_STATES, TRANSACTIONAL_TIMEOUT_MS } from "../config/transactional.js"
 import { nextTransactionalPhase, transactionalCandidates, TRANSACTIONAL_CONTROL_SELECTOR, type TransactionalNetworkGuard } from "../utils/transactional-safety.js"
 import { assertPublicHttpUrl, PublicUrlError } from "../utils/public-url.js"
 import { authenticate, findLoginControls, rememberSessionSecrets } from "./authentication.service.js"
@@ -165,7 +165,7 @@ export async function exploreApplication(rawUrl: string, dependencies?: Discover
   authenticated?: boolean; credentials?: LoginCredentials; signal?: AbortSignal; transactionalExploration?: boolean
   inspectAuthenticated?: (session: DiscoverySession, redactor: SecretRedactor, beforeInteraction: () => void) => Promise<void>
 } = {}): Promise<ExplorationResult> {
-  if (options.transactionalExploration) assertTransactionalOrigin(rawUrl)
+  if (options.transactionalExploration) assertTransactionalModeEnabled()
   const transactional: TransactionalNetworkGuard | undefined = options.transactionalExploration ? { phase: "catalog" } : undefined
   const credentials = options.authenticated ? getTestCredentials(rawUrl, options.credentials) : undefined
   const redactor = credentials ? new SecretRedactor([credentials.username, credentials.password]) : undefined
@@ -384,6 +384,7 @@ export async function exploreApplication(rawUrl: string, dependencies?: Discover
         // verified authenticated state, using the very same context and page.
         const protectedUrl = session.page.url()
         if (new URL(protectedUrl).search || new URL(protectedUrl).hash) throw new AuthenticationError("authentication-unconfirmed")
+        if (transactional) session.authorizeTransactional!()
         result = emptyExploration(protectedUrl, !!transactional)
         result.authentication = { status: "authenticated", execution: "discovery-only" }
         if (options.inspectAuthenticated) {
@@ -392,6 +393,7 @@ export async function exploreApplication(rawUrl: string, dependencies?: Discover
         } else if (transactional) await walkTransactional(protectedUrl)
         else await walk(protectedUrl)
       } else if (transactional) {
+        session.authorizeTransactional!()
         result = emptyExploration(session.initialUrl.href, true)
         await walkTransactional(session.initialUrl.href)
       } else await walk(session.initialUrl.href)

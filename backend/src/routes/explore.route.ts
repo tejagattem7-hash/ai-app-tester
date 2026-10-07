@@ -7,9 +7,13 @@ import { workflowOwner } from "../utils/workflow-session.js"
 import { DiscoveryBudgetError, DiscoveryCapacityError, DiscoveryNavigationError } from "../services/discovery.service.js"
 import { exploreApplication } from "../services/exploration.service.js"
 import { PublicUrlError } from "../utils/public-url.js"
-import { TransactionalExplorationError } from "../config/transactional.js"
+import { assertTransactionalModeEnabled, isTransactionalModeEnabled, TransactionalExplorationError } from "../config/transactional.js"
 
 export const exploreRouter = Router()
+
+exploreRouter.get("/capabilities", (_request, response) => {
+  response.set("Cache-Control", "no-store").json({ transactionalModeEnabled: isTransactionalModeEnabled() })
+})
 
 exploreRouter.post("/", async (request, response) => {
   const authenticated = request.body?.authenticated === true
@@ -21,6 +25,7 @@ exploreRouter.post("/", async (request, response) => {
   response.on("close", disconnected)
   try {
     const { url, authenticated, username, password, transactionalExploration } = exploreRequestSchema.parse(request.body)
+    if (transactionalExploration) assertTransactionalModeEnabled()
     const owner = authenticated ? workflowOwner(request, response, true) : undefined
     const supplied = username !== undefined && password !== undefined ? { username, password } : undefined
     const credentials = authenticated ? getTestCredentials(url, supplied) : undefined
@@ -33,7 +38,7 @@ exploreRouter.post("/", async (request, response) => {
     }
     response.json(result)
   } catch (error) {
-    if (error instanceof TransactionalExplorationError) { response.status(400).json({ error: error.message, code: error.code }); return }
+    if (error instanceof TransactionalExplorationError) { response.status(403).json({ error: error.message, code: error.code }); return }
     if (error instanceof WorkflowError) { response.status(409).json({ error: "Authenticated workflow unavailable", code: error.code }); return }
     if (error instanceof AuthenticationError) {
       response.status(error.code === "credentials-not-configured" ? 503 : error.code === "origin-not-allowed" ? 400 : 502)

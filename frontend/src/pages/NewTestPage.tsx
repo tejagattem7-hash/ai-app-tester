@@ -5,7 +5,7 @@ import { PageHeader } from "@/components/PageHeader"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { targetUrl } from "@/data/mockData"
-import { cancelAuthWorkflow, createTestPlan, discoverPage, exploreApplication } from "@/lib/api"
+import { cancelAuthWorkflow, createTestPlan, discoverPage, exploreApplication, getExplorationCapabilities } from "@/lib/api"
 import { clearAuthWorkflow, retainAuthWorkflow } from "@/lib/auth-workflow"
 import { discoveryErrorMessage, missingCredentialsCode, type AuthenticationMode } from "@/lib/discovery-errors"
 import type { TestPlanNavigationState } from "@/types/planning"
@@ -18,6 +18,8 @@ export function NewTestPage() {
   const [explore, setExplore] = useState(false)
   const [authenticated, setAuthenticated] = useState(false)
   const [transactionalExploration, setTransactionalExploration] = useState(false)
+  const [transactionalModeEnabled, setTransactionalModeEnabled] = useState<boolean | null>(null)
+  const [capabilityError, setCapabilityError] = useState(false)
   const [username, setUsername] = useState("")
   const [password, setPassword] = useState("")
   const [showUsername, setShowUsername] = useState(false)
@@ -26,7 +28,14 @@ export function NewTestPage() {
   const pending = useRef<{ controller: AbortController; id?: string } | undefined>(undefined)
   useEffect(() => {
     clearAuthWorkflow()
+    const controller = new AbortController()
+    void getExplorationCapabilities(controller.signal).then(({ transactionalModeEnabled }) => {
+      if (!controller.signal.aborted) setTransactionalModeEnabled(transactionalModeEnabled)
+    }).catch(() => {
+      if (!controller.signal.aborted) setCapabilityError(true)
+    })
     return () => {
+      controller.abort()
       pending.current?.controller.abort()
       if (pending.current?.id) void cancelAuthWorkflow(pending.current.id)
     }
@@ -111,10 +120,14 @@ export function NewTestPage() {
             <p id="explore-help" className="mt-2 text-xs text-slate-500">{transactionalExploration ? "May inspect up to 10 workflow states and take a minute." : "May inspect up to 5 related pages and take a minute."}</p>
             {explore && <>
               <label className="mt-3 flex items-center gap-2 text-sm text-slate-600">
-                <input type="checkbox" checked={transactionalExploration} onChange={(event) => { setTransactionalExploration(event.target.checked); setError(null) }} disabled={isLoading} aria-describedby="transactional-help" />
+                <input type="checkbox" checked={transactionalExploration} onChange={(event) => { setTransactionalExploration(event.target.checked); setError(null) }} disabled={isLoading || transactionalModeEnabled !== true} aria-describedby="transactional-help" />
                 Explore transactional test workflows
               </label>
-              <p id="transactional-help" className="mt-2 text-xs text-slate-500">For configured test/demo applications only. May add an item to a cart and complete a test checkout using placeholder data. Explores up to 10 states in one minute; generated plans are review-only.</p>
+              <p id="transactional-help" className="mt-2 text-xs text-slate-500">{transactionalModeEnabled === false
+                ? "Transactional exploration is disabled on this server."
+                : capabilityError ? "Transactional exploration availability could not be checked. Reload to try again."
+                : transactionalModeEnabled === null ? "Checking transactional exploration availability..."
+                : "Use only test/demo applications where you permit state changes. This opt-in applies to the submitted application's origin for this exploration only. May complete a test checkout with placeholder data. Explores up to 10 states in one minute; generated plans are review-only."}</p>
               <label className="mt-3 flex items-center gap-2 text-sm text-slate-600">
                 <input type="checkbox" checked={authenticated} onChange={(event) => {
                   setAuthenticated(event.target.checked)

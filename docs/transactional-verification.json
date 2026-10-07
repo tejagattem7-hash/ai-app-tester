@@ -1,20 +1,6 @@
 {
   "verifiedOn": "2026-10-05",
-  "verification": {
-    "typescript": { "command": "npx tsc -b --pretty false", "status": "passed" },
-    "lint": { "command": "npm run lint", "status": "passed" },
-    "productionBuild": { "command": "npm run build", "status": "passed" },
-    "backendTests": {
-      "command": "node --import tsx --test --test-concurrency=2 backend/test/*.test.ts",
-      "status": "passed", "passed": 134, "failed": 0, "suites": 15,
-      "note": "Full npm test previously passed 133 checks with one existing Chromium launch failing EPERM; the full suite passed with two workers."
-    },
-    "frontendBrowserSmoke": {
-      "status": "passed",
-      "checks": ["unchecked defaults", "reset when exploration disabled", "explicit transactional request option", "review-only reason displayed", "Run tests disabled"]
-    }
-  },
-  "originConfiguration": "Temporary verification process only; persistent configuration unchanged",
+  "originConfiguration": "Origin derived per request from the validated submitted URL; server capability enabled only in this verification process; .env unchanged",
   "checks": [
     {
       "name": "SauceDemo discover",
@@ -355,14 +341,14 @@
     }
   ],
   "plan": {
-    "pagePurpose": "Swag Labs is a demo shopping application for browsing products, adding items to a cart, and completing checkout. The observed authenticated workflow covers adding a backpack, viewing the cart, required-field validation, checkout summary, and order completion.",
+    "pagePurpose": "Swag Labs is a demo shopping application for browsing products, adding items to a cart, entering checkout information, reviewing an order, and completing checkout.",
     "tests": [
       {
         "id": "add-backpack-and-view-cart",
-        "title": "Add the backpack and verify its presence in the cart",
+        "title": "Add the observed backpack product and verify its cart entry",
         "category": "functional",
-        "reason": "Verify the observed inventory-to-cart workflow and the product control's change after adding an item.",
-        "expectedOutcome": "The backpack's inventory control displays Remove, and the cart contains Sauce Labs Backpack with Checkout available.",
+        "reason": "Verifies the recorded add-to-cart interaction, its visible inventory feedback, and navigation to a cart containing the selected product.",
+        "expectedOutcome": "The backpack's inventory action changes to Remove, and the cart displays Sauce Labs Backpack with Remove and Checkout controls.",
         "actions": [
           {
             "type": "navigate",
@@ -374,7 +360,7 @@
           },
           {
             "type": "assertText",
-            "target": "Sauce Labs Backpack product's Remove button",
+            "target": "Remove button for Sauce Labs Backpack",
             "text": "Remove"
           },
           {
@@ -392,17 +378,22 @@
           },
           {
             "type": "assertText",
+            "target": "Remove button for Sauce Labs Backpack",
+            "text": "Remove"
+          },
+          {
+            "type": "assertText",
             "target": "Checkout button",
             "text": "Checkout"
           }
         ]
       },
       {
-        "id": "empty-checkout-required-name",
-        "title": "Display first-name validation when checkout information is empty",
+        "id": "checkout-empty-information-validation",
+        "title": "Show the observed required-first-name error for empty checkout information",
         "category": "validation",
-        "reason": "Exercise the recorded empty submission and verify its observed required-field error without inferring other validation rules.",
-        "expectedOutcome": "Checkout remains on the information page and displays Error: First Name is required.",
+        "reason": "Covers the recorded empty submission and its explicit validation state without assuming other required-field messages.",
+        "expectedOutcome": "Submitting the empty information form keeps checkout on step one and displays Error: First Name is required.",
         "actions": [
           {
             "type": "navigate",
@@ -429,22 +420,22 @@
             "target": "Continue"
           },
           {
-            "type": "assertUrl",
-            "url": "https://www.saucedemo.com/checkout-step-one.html"
+            "type": "assertText",
+            "target": "Checkout validation error heading",
+            "text": "Error: First Name is required"
           },
           {
-            "type": "assertText",
-            "target": "First Name required error heading",
-            "text": "Error: First Name is required"
+            "type": "assertUrl",
+            "url": "https://www.saucedemo.com/checkout-step-one.html"
           }
         ]
       },
       {
-        "id": "recover-validation-and-complete-checkout",
-        "title": "Correct empty checkout information, review the backpack, and finish",
+        "id": "recover-validation-and-complete-demo-checkout",
+        "title": "Recover from validation, review the backpack, and complete demo checkout",
         "category": "functional",
-        "reason": "Verify recovery from the observed validation error and the complete configured demo workflow through summary and confirmation.",
-        "expectedOutcome": "Entering the recorded customer information advances to a summary containing Sauce Labs Backpack. Finish opens the completion page with Thank you for your order!",
+        "reason": "Exercises the full recorded workflow, including correcting the validation error with the exact observed values, reaching the order summary, and displaying completion confirmation.",
+        "expectedOutcome": "The observed checkout information advances to step two with Sauce Labs Backpack, and Finish opens the completion page displaying Thank you for your order!",
         "actions": [
           {
             "type": "navigate",
@@ -468,7 +459,7 @@
           },
           {
             "type": "assertText",
-            "target": "First Name required error heading",
+            "target": "Checkout validation error heading",
             "text": "Error: First Name is required"
           },
           {
@@ -496,7 +487,7 @@
           },
           {
             "type": "assertText",
-            "target": "Sauce Labs Backpack product link",
+            "target": "Sauce Labs Backpack product link in the order summary",
             "text": "Sauce Labs Backpack"
           }
         ]
@@ -571,5 +562,38 @@
   "lifePlannerAuthenticated": {
     "status": "not-live-verified",
     "reason": "No dedicated test account for this separate origin was supplied. Existing authenticated navigation regressions cover the unchanged path."
+  },
+  "configurationRegression": {
+    "capability": "TRANSACTIONAL_MODE_ENABLED=true plus explicit transactionalExploration: true",
+    "legacyOriginAllowlistRequired": false,
+    "origin": "Exact URL.origin from validated submitted public URL, activated after successful login when requested",
+    "lifetime": "Current session memory only; revoked on success, failure, cancellation or timeout within the existing 60-second budget",
+    "envUnchanged": true,
+    "persistentOriginAllowlist": false
+  },
+  "localChecks": {
+    "typescript": { "command": "npx tsc -b --pretty false", "status": "passed" },
+    "lint": { "command": "npm run lint", "status": "passed" },
+    "build": { "command": "npm run build", "status": "passed" },
+    "focusedTests": {
+      "command": "node --import tsx --test --test-concurrency=2 backend/test/transactional-exploration.test.ts backend/test/app.test.ts backend/test/discovery-errors.test.ts",
+      "status": "passed", "passed": 59, "failed": 0
+    },
+    "backendTests": {
+      "command": "node --import tsx --test --test-concurrency=2 backend/test/*.test.ts",
+      "status": "passed", "passed": 147, "failed": 0, "suites": 15
+    },
+    "frontendBrowserSmoke": {
+      "status": "passed",
+      "method": "Playwright against local Vite frontend with mocked capability and API responses",
+      "checks": [
+        "Disabled and unavailable capabilities disable unchecked transaction consent with the appropriate message",
+        "Enabled capability leaves consent unchecked and omits transactionalExploration from ordinary exploration requests",
+        "Explicit opt-in sends transactionalExploration: true for two different submitted public application URLs",
+        "Controlled disabled-server error is displayed without backend configuration details",
+        "Automatic-exploration toggle and page reload reset consent",
+        "Submitted origins and transactional authorization are not saved in frontend localStorage"
+      ]
+    }
   }
 }

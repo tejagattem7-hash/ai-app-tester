@@ -9,7 +9,7 @@ import type { ExplorationResult } from "../src/schemas/exploration-result.schema
 // SauceDemo routes appear only as verification targets, never in runtime code.
 const target = "https://www.saucedemo.com/"
 const expectedRoutes = ["/inventory.html", "/cart.html", "/checkout-step-one.html", "/checkout-step-two.html", "/checkout-complete.html"]
-const record: Record<string, unknown> = { verifiedOn: "2026-10-05", originConfiguration: "Temporary verification process only; persistent configuration unchanged", checks: [] }
+const record: Record<string, unknown> = { verifiedOn: "2026-10-05", originConfiguration: "Origin derived per request from the validated submitted URL; server capability enabled only in this verification process; .env unchanged", checks: [] }
 const checks = record.checks as Record<string, unknown>[]
 let transactional: ExplorationResult | undefined
 const summarize = (result: ExplorationResult) => ({ pages: result.pages.map((page) => ({ id: page.id, depth: page.depth, url: page.url,
@@ -20,7 +20,7 @@ for (const [name, operation] of [
   ["SauceDemo Level 2", () => exploreApplication(target).then(summarize)],
   ["SauceDemo read-only Level 3", () => exploreApplication(target, undefined, { authenticated: true, credentials: getTestCredentials(target) }).then(summarize)],
   ["SauceDemo transactional Level 3", async () => {
-    process.env.TEST_TRANSACTIONAL_ORIGINS = new URL(target).origin
+    process.env.TRANSACTIONAL_MODE_ENABLED = "true"
     transactional = await exploreApplication(target, undefined, { authenticated: true, credentials: getTestCredentials(target), transactionalExploration: true })
     return { ...summarize(transactional), targets: Object.fromEntries(expectedRoutes.map((path) => [path, transactional!.pages.some((page) => new URL(page.url).pathname === path)])) }
   }],

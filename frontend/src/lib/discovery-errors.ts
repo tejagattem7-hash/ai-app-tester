@@ -1,7 +1,7 @@
 export type AuthenticationMode = "manual" | "configured"
 
 const messages: Record<string, string> = {
-  "transactional-origin-not-allowed": "Transactional exploration is available only for explicitly configured test applications. Ask the backend administrator to configure this test origin.",
+  "transactional-mode-disabled": "Transactional exploration is disabled on this server.",
   "username-required": "Enter your username or email.",
   "password-required": "Enter your password.",
   "credentials-required": "Enter your username/email and password.",
