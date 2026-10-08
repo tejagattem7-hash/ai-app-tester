@@ -4,10 +4,13 @@ import { MAX_TEST_SCENARIOS, testPlanSchema, type TestAction, type TestPlan } fr
 import { configuredSecretRedactor, type SecretRedactor } from "../utils/secret-redaction.js"
 
 export class InvalidTestPlanError extends Error {
-  constructor(message: string, options?: ErrorOptions) {
+  constructor(message: string, options?: ErrorOptions & { recoverable?: boolean }) {
     super(message, options)
     this.name = "InvalidTestPlanError"
+    this.recoverable = options?.recoverable ?? true
   }
+
+  readonly recoverable: boolean
 }
 
 const SYSTEM_PROMPT = `You are a senior web application test planner.
@@ -34,6 +37,10 @@ Rules:
 - When authentication.status is authenticated, startUrl is an already authenticated root. Authentication happened separately; never generate login, credentials or session setup actions. Unless transactionalExploration.enabled is true, use only recorded read/view/navigation clicks and assertions. Do not fill, select, check or submit read-only authenticated forms. Execution authorization is handled separately; do not describe execution availability in the plan.
 - When transactionalExploration.enabled is true, cover the actually observed cart, checkout, required-field validation, summary and completion states. For each recorded transition, replay interaction.fills in order with their EXACT target and value before its click. An empty validationAttempt has no fills. These configured demo workflows may include Add to cart, Checkout, Continue and Finish. Do not invent payment, unobserved validation or purchase behavior. Plans are reviewed separately from execution.
 - Give every scenario a unique lowercase kebab-case id.`
+
+const RETRY_SYSTEM_PROMPT = `${SYSTEM_PROMPT}
+
+This is a repair attempt. Return a completely new plan that follows every rule exactly. In particular, use only observed controls and text, begin explored scenarios at startUrl, and end every scenario with an observed assertion.`
 
 function createModelInput(discovery: PlanningDiscovery): string {
   if ("pages" in discovery) {
@@ -208,10 +215,39 @@ function observedTransactionalPlan(discovery: ExplorationResult, pagePurpose: st
   return { ...plan, execution: "transactional" }
 }
 
+/**
+ * A deliberately small plan built only from server-observed entry-state data.
+ * It is used by the HTTP boundary only after two semantically invalid model
+ * responses, so a transient model mistake cannot strand a user mid-workflow.
+ */
+export function createObservedFallbackPlan(discovery: PlanningDiscovery): TestPlan {
+  if ("pages" in discovery && discovery.transactionalExploration) {
+    return observedTransactionalPlan(discovery, "Verify the observed transactional entry state")
+  }
+
+  const url = "pages" in discovery ? discovery.pages[0]!.url : discovery.url
+  const startUrl = "pages" in discovery ? discovery.startUrl : discovery.url
+  const plan: TestPlan = {
+    pagePurpose: "Verify the observed application entry experience",
+    tests: [{
+      id: "observed-entry-state",
+      title: "Verify the observed entry state",
+      category: "content",
+      reason: "Provides a safe, deterministic verification based on the captured application entry state.",
+      expectedOutcome: "The observed entry URL is reached.",
+      actions: [{ type: "navigate", url: startUrl }, { type: "assertUrl", url }],
+    }],
+  }
+  const parsed = testPlanSchema.parse(plan)
+  if ("pages" in discovery) validateObservedWorkflow(parsed, discovery)
+  return "pages" in discovery && discovery.authentication ? { ...parsed, execution: "discovery-only" } : parsed
+}
+
 export async function createTestPlan(
   discovery: PlanningDiscovery,
   provider: TestPlanningLlmProvider,
   workflowRedactor?: SecretRedactor,
+  retrying = false,
 ): Promise<TestPlan> {
   // A second secret boundary protects even client-supplied planning metadata.
   const redactor = workflowRedactor ?? configuredSecretRedactor()
@@ -219,55 +255,65 @@ export async function createTestPlan(
   const authenticated = "pages" in discovery && !!discovery.authentication
   discovery = redactor.sanitize(discovery, authenticated)
   const rawPlan = await provider.generateTestPlan({
-    system: SYSTEM_PROMPT,
+    system: retrying ? RETRY_SYSTEM_PROMPT : SYSTEM_PROMPT,
     input: createModelInput(discovery),
   })
 
-  if (JSON.stringify(rawPlan) !== JSON.stringify(redactor.sanitize(rawPlan, authenticated))) {
-    throw new InvalidTestPlanError("The model returned sensitive or unsupported URL data")
-  }
-
-  const result = testPlanSchema.safeParse(rawPlan)
-  if (!result.success) {
-    if ("pages" in discovery && discovery.transactionalExploration) {
-      return observedTransactionalPlan(discovery, discovery.pages[0]?.title || "Observed test workflow")
-    }
-    throw new InvalidTestPlanError("The model returned a plan that does not match the required schema", {
-      cause: result.error,
-    })
-  }
-
-  const ids = result.data.tests.map((test) => test.id)
-  if (new Set(ids).size !== ids.length) {
-    if ("pages" in discovery && discovery.transactionalExploration) return observedTransactionalPlan(discovery, result.data.pagePurpose)
-    throw new InvalidTestPlanError("The model returned duplicate test ids")
-  }
-
   try {
-    if ("pages" in discovery) {
-      const terminalStates = validateObservedWorkflow(result.data, discovery)
-      completeObservedFinalAssertions(result.data, discovery, terminalStates)
-      validateObservedWorkflow(result.data, discovery)
-      if (discovery.transactionalExploration) {
-        completeTransactionalCoverage(result.data, discovery)
-        validateObservedWorkflow(result.data, discovery)
-      }
+    if (JSON.stringify(rawPlan) !== JSON.stringify(redactor.sanitize(rawPlan, authenticated))) {
+      throw new InvalidTestPlanError("The model returned sensitive or unsupported URL data", { recoverable: false })
     }
 
-    const scenarioWithoutFinalAssertion = result.data.tests.find((test) => {
-      const finalAction = test.actions.at(-1)
-      return finalAction?.type !== "assertText" && finalAction?.type !== "assertUrl"
-    })
-    if (scenarioWithoutFinalAssertion) {
-      throw new InvalidTestPlanError(`Test ${scenarioWithoutFinalAssertion.id} must end with an assertion`)
+    const result = testPlanSchema.safeParse(rawPlan)
+    if (!result.success) {
+      if ("pages" in discovery && discovery.transactionalExploration) {
+        return observedTransactionalPlan(discovery, discovery.pages[0]?.title || "Observed test workflow")
+      }
+      throw new InvalidTestPlanError("The model returned a plan that does not match the required schema", {
+        cause: result.error,
+      })
     }
+
+    const ids = result.data.tests.map((test) => test.id)
+    if (new Set(ids).size !== ids.length) {
+      if ("pages" in discovery && discovery.transactionalExploration) return observedTransactionalPlan(discovery, result.data.pagePurpose)
+      throw new InvalidTestPlanError("The model returned duplicate test ids")
+    }
+
+    try {
+      if ("pages" in discovery) {
+        const terminalStates = validateObservedWorkflow(result.data, discovery)
+        completeObservedFinalAssertions(result.data, discovery, terminalStates)
+        validateObservedWorkflow(result.data, discovery)
+        if (discovery.transactionalExploration) {
+          completeTransactionalCoverage(result.data, discovery)
+          validateObservedWorkflow(result.data, discovery)
+        }
+      }
+
+      const scenarioWithoutFinalAssertion = result.data.tests.find((test) => {
+        const finalAction = test.actions.at(-1)
+        return finalAction?.type !== "assertText" && finalAction?.type !== "assertUrl"
+      })
+      if (scenarioWithoutFinalAssertion) {
+        throw new InvalidTestPlanError(`Test ${scenarioWithoutFinalAssertion.id} must end with an assertion`)
+      }
+    } catch (error) {
+      if (error instanceof InvalidTestPlanError && "pages" in discovery && discovery.transactionalExploration) {
+        return observedTransactionalPlan(discovery, result.data.pagePurpose)
+      }
+      throw error
+    }
+
+    if ("pages" in discovery && discovery.transactionalExploration) return { ...result.data, execution: "transactional" }
+    return "pages" in discovery && discovery.authentication ? { ...result.data, execution: "discovery-only" } : result.data
   } catch (error) {
-    if (error instanceof InvalidTestPlanError && "pages" in discovery && discovery.transactionalExploration) {
-      return observedTransactionalPlan(discovery, result.data.pagePurpose)
+    // Structured output guarantees shape, but the model can still select a
+    // control or assertion that our evidence validator correctly rejects.
+    // Retry once with a focused repair instruction before exposing failure.
+    if (error instanceof InvalidTestPlanError && error.recoverable && !retrying) {
+      return createTestPlan(discovery, provider, redactor, true)
     }
     throw error
   }
-
-  if ("pages" in discovery && discovery.transactionalExploration) return { ...result.data, execution: "transactional" }
-  return "pages" in discovery && discovery.authentication ? { ...result.data, execution: "discovery-only" } : result.data
 }

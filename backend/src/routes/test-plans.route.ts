@@ -3,7 +3,7 @@ import { z } from "zod"
 import { getConfiguredTestPlanningProvider } from "../providers/llm/configured-provider.js"
 import { LlmConfigurationError, LlmProviderError } from "../providers/llm/test-planning.provider.js"
 import { planningDiscoverySchema } from "../schemas/exploration-result.schema.js"
-import { createTestPlan, InvalidTestPlanError } from "../services/test-planning.service.js"
+import { createObservedFallbackPlan, createTestPlan, InvalidTestPlanError } from "../services/test-planning.service.js"
 import { authWorkflows, type AuthWorkflow, WorkflowError, withWorkflowCredentials } from "../services/auth-workflow.service.js"
 import { workflowId, workflowOwner } from "../utils/workflow-session.js"
 import { SecretRedactor } from "../utils/secret-redaction.js"
@@ -16,10 +16,11 @@ function exhaustedCredits(error: unknown): boolean {
 
 testPlansRouter.post("/", async (request, response) => {
   let workflow: AuthWorkflow | undefined
+  let discovery: z.infer<typeof planningDiscoverySchema> | undefined
   const disconnected = () => { if (!response.writableEnded && workflow) authWorkflows.remove(workflow.id) }
   response.on("close", disconnected)
   try {
-    const discovery = planningDiscoverySchema.parse(request.body)
+    discovery = planningDiscoverySchema.parse(request.body)
     const id = workflowId(request)
     if (id) workflow = authWorkflows.beginPlanning(id, workflowOwner(request, response), discovery)
     const provider = getConfiguredTestPlanningProvider()
@@ -33,6 +34,16 @@ testPlansRouter.post("/", async (request, response) => {
     response.set("Cache-Control", "no-store")
     response.json(plan)
   } catch (error) {
+    // A semantically invalid model plan is not a user error. Return a small,
+    // evidence-only entry-state plan after the service's repair retry, so a
+    // transient model mistake cannot break an otherwise valid test workflow.
+    if (error instanceof InvalidTestPlanError && error.recoverable && discovery) {
+      const fallback = createObservedFallbackPlan(discovery)
+      if (workflow) authWorkflows.attachPlan(workflow.id, workflow.owner, fallback)
+      response.set("Cache-Control", "no-store")
+      response.json(fallback)
+      return
+    }
     if (workflow) authWorkflows.remove(workflow.id)
     if (error instanceof WorkflowError) { response.status(409).json({ error: "Authenticated workflow unavailable", code: error.code }); return }
     if (request.get("x-auth-workflow")) {

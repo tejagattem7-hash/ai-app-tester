@@ -5,7 +5,7 @@ import type { DiscoveryResultInput } from "../src/schemas/discovery-result.schem
 import { EXPLORATION_TIMEOUT_MS, MAX_EXPLORATION_DEPTH, MAX_EXPLORATION_INTERACTIONS, MAX_EXPLORATION_PAGES, MAX_THOROUGH_DEPTH, MAX_THOROUGH_INTERACTIONS, MAX_THOROUGH_PAGES, THOROUGH_TIMEOUT_MS } from "../src/config/exploration.js"
 import { explorationResultSchema, planningDiscoverySchema } from "../src/schemas/exploration-result.schema.js"
 import { MAX_TEST_SCENARIOS, testPlanSchema } from "../src/schemas/test-plan.schema.js"
-import { createTestPlan, InvalidTestPlanError } from "../src/services/test-planning.service.js"
+import { createObservedFallbackPlan, createTestPlan, InvalidTestPlanError } from "../src/services/test-planning.service.js"
 
 const discovery: DiscoveryResultInput = {
   title: "Example",
@@ -74,6 +74,33 @@ describe("test planning", () => {
       tests: [scenario("content-one"), scenario("content-two"), scenario("content-three")],
     }))
     assert.equal(result.tests.length, 3)
+  })
+
+  it("repairs one semantically invalid model plan before failing the workflow", async () => {
+    let calls = 0
+    const result = await createTestPlan(discovery, {
+      async generateTestPlan(prompt) {
+        calls += 1
+        if (calls === 1) return {
+          pagePurpose: "Example page",
+          tests: [{ ...scenario("missing-final-assertion"), actions: [{ type: "click", target: "More" }] }],
+        }
+        assert.ok(prompt.system.includes("This is a repair attempt"))
+        return { pagePurpose: "Example page", tests: [scenario("repaired-entry-check")] }
+      },
+    })
+    assert.equal(calls, 2)
+    assert.equal(result.tests[0]?.id, "repaired-entry-check")
+  })
+
+  it("builds a safe observed-entry fallback plan when a model plan cannot be repaired", () => {
+    const exploration = observedExploration()
+    const fallback = createObservedFallbackPlan(exploration)
+    assert.deepEqual(fallback.tests[0]?.actions, [
+      { type: "navigate", url: exploration.startUrl },
+      { type: "assertUrl", url: exploration.pages[0]!.url },
+    ])
+    assert.equal(fallback.execution, undefined)
   })
 
   it("accepts a plan with more than six scenarios", async () => {
