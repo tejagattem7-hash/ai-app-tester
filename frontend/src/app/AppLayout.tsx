@@ -1,10 +1,9 @@
-import { FlaskConical, History, Plus } from "lucide-react"
+import { FlaskConical, Plus } from "lucide-react"
 import { NavLink, Outlet } from "react-router-dom"
 import { cn } from "@/lib/utils"
 
 const links = [
   { to: "/", label: "New test", icon: Plus },
-  { to: "/report", label: "Latest report", icon: History },
 ]
 
 export function AppLayout() {
