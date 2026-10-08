@@ -99,16 +99,16 @@ export function NewTestPage() {
   }
 
   return (
-    <div className="space-y-10">
+    <div className="space-y-8 md:space-y-10">
       <PageHeader eyebrow="New test" title="Test a web app before your users do." description="Enter a public URL. AI App Tester will inspect the experience, create focused scenarios, and turn the results into actionable findings." />
-      <Card className="overflow-hidden border-slate-300">
-        <CardContent className="p-7 md:p-9">
+      <Card className="overflow-hidden border-slate-200 shadow-md shadow-slate-200/40">
+        <CardContent className="p-6 md:p-8">
           <form onSubmit={submit} noValidate>
             <label htmlFor="url" className="text-sm font-semibold text-slate-900">Public application URL</label>
             <div className="mt-3 flex flex-col gap-3 sm:flex-row">
               <div className="relative flex-1">
                 <Globe2 className="absolute left-4 top-1/2 size-5 -translate-y-1/2 text-slate-400" />
-                <input id="url" type="url" required value={url} onChange={(event) => { setUrl(event.target.value); setError(null) }} disabled={isLoading} className="h-12 w-full rounded-lg border border-slate-300 bg-white pl-12 pr-4 text-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 disabled:cursor-not-allowed disabled:bg-slate-50" placeholder="https://your-app.com" />
+                <input id="url" type="url" required value={url} onChange={(event) => { setUrl(event.target.value); setError(null) }} disabled={isLoading} className="h-12 w-full rounded-lg border border-slate-300 bg-white pl-12 pr-4 text-sm text-slate-900 outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 disabled:cursor-not-allowed disabled:bg-slate-50" placeholder="https://your-app.com" />
               </div>
               <Button type="submit" className="h-12" disabled={isLoading}>
                 {isLoading ? <><LoaderCircle className="size-4 animate-spin" />Creating plan...</> : <>Create test plan <ArrowRight className="size-4" /></>}
@@ -188,9 +188,9 @@ export function NewTestPage() {
             <p className="mt-3 flex items-center gap-2 text-xs text-slate-500"><ShieldCheck className="size-3.5" />Public URLs only. Use a dedicated test account for authenticated exploration.</p>
           </form>
         </CardContent>
-        <div className="grid border-t border-slate-200 bg-slate-50 md:grid-cols-3">{["Discover key interactions", "Generate meaningful tests", "Get actionable evidence"].map((item, index) => <div key={item} className="flex items-center gap-3 border-b border-slate-200 px-6 py-4 last:border-b-0 md:border-b-0 md:border-r md:last:border-r-0"><span className="flex size-6 items-center justify-center rounded-full bg-white text-xs font-bold text-indigo-600 shadow-sm">{index + 1}</span><span className="text-sm text-slate-600">{item}</span></div>)}</div>
+        <div className="grid border-t border-slate-200 bg-slate-50/80 md:grid-cols-3">{["Discover key interactions", "Generate meaningful tests", "Get actionable evidence"].map((item, index) => <div key={item} className="flex items-center gap-3 border-b border-slate-200 px-6 py-4 last:border-b-0 md:border-b-0 md:border-r md:last:border-r-0"><span className="flex size-6 items-center justify-center rounded-full border border-indigo-100 bg-white text-xs font-bold text-indigo-600">{index + 1}</span><span className="text-sm font-medium text-slate-600">{item}</span></div>)}</div>
       </Card>
-      <div className="rounded-2xl bg-indigo-950 p-7 text-white"><Sparkles className="size-5 text-indigo-300" /><h2 className="mt-5 text-xl font-semibold">Designed for signal, not test volume</h2><p className="mt-2 max-w-2xl text-sm leading-6 text-indigo-200">The MVP focuses on a small set of high-value user journeys and clear evidence that a developer can act on.</p></div>
+      <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm md:p-7"><div className="flex items-start gap-4"><div className="rounded-lg bg-indigo-50 p-2.5 text-indigo-600"><Sparkles className="size-5" /></div><div><h2 className="text-lg font-semibold text-slate-950">Designed for signal, not test volume</h2><p className="mt-1.5 max-w-2xl text-sm leading-6 text-slate-600">The MVP focuses on a small set of high-value user journeys and clear evidence that a developer can act on.</p></div></div></div>
     </div>
   )
 }
